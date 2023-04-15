@@ -786,7 +786,7 @@ Time consumption is: 785
 | BM_factorial                   | 9.15           | 108          | 9.15          | 106         | 76995221          | 6612491         | 11.8032787 | 11.5846995 | 11.6439056       |
 | average                        |                |              |               |             |                   |                 | 15.4073332 | 14.6701879 | 13.23012203      |
 
-![image-20220929223719123](images/20220922-d1h-benchmark/ratio_microbench.png)
+![image-20220929223719123](https://gitee.com/xuyq0306/riscv-linux/blob/d1h_benchmark/articles/images/20220922-d1h-benchmark/ratio_microbench.png)
 
 #### 和 i7-4770HQ 对比 Unixbench
 
@@ -875,7 +875,7 @@ System Benchmarks Index Score                                        3037.7
 | System Call Overhead                   | 15000    | 380766.8    | 554765.5      | 1.4569692   | lps   | (10.0 s, 7 samples) |
 | avg                                    |          |             |               | 10.81840726 |       |                     |
 
-![image-20220929211103279](images/20220922-d1h-benchmark/ratio.png)
+![image-20220929211103279](https://gitee.com/xuyq0306/riscv-linux/blob/d1h_benchmark/articles/images/20220922-d1h-benchmark/ratio.png)
 
 经过计算可以得出，选用的 `X86_64` 架构 CPU 性能大概为所选用的 `rv64` 架构 CPU 的 10 倍。
 
