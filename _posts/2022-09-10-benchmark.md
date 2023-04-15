@@ -5,7 +5,7 @@ mathjax: true
 ---
 
 
-<div>{%- include extensions/netease-cloud-music.html id='27483202' -%}</div>
+
 
 > Corrector: [TinyCorrect](https://gitee.com/tinylab/tinycorrect) v0.1-rc3 - [spaces tables pangu autocorrect epw]<br/>
 > Author:  LucasXu <lucas.xuyq.work@outlook.com><br/>
