@@ -18,7 +18,7 @@
 ##############################
 text_skin: ocean
 highlight_theme: tomorrow-night-eighties # "default" (default), "tomorrow", "tomorrow-night", "tomorrow-night-eighties", "tomorrow-night-blue", "tomorrow-night-bright"
-url     : # the base hostname & protocol for your site e.g. https://www.someone.com
+url     : https://xuyq19.github.io
 baseurl : # does not include hostname
 title   : Your Site Title
 description: > # this means to ignore newlines until "Language & timezone"
@@ -34,7 +34,7 @@ timezone: CN
 ## => Author and Social
 ##############################
 author:
-  type      : # "person" (default), "organization"
+  type      : "person"
   name      : "Lucas Xu"
   url       : "https://xuyq19.github.io"
   avatar    : # path or url of avatar image (square)
@@ -55,7 +55,7 @@ author:
 
 ## => GitHub Repository (if the site is hosted by GitHub)
 ##############################
-repository: user_name/repo_name
+repository: xuyq19/xuyq19.github.io
 repository_tree: master
 
 
