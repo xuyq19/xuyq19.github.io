@@ -1,6 +1,6 @@
 ---
 layout: article
-title: Document - Writing Posts
+title: RISC-V 性能实测，以平头哥 C906 为例
 mathjax: true
 ---
 
