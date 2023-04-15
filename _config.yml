@@ -20,7 +20,7 @@ text_skin: ocean
 highlight_theme: tomorrow-night-eighties # "default" (default), "tomorrow", "tomorrow-night", "tomorrow-night-eighties", "tomorrow-night-blue", "tomorrow-night-bright"
 url     : https://xuyq19.github.io
 baseurl : # does not include hostname
-title   : Your Site Title
+title   : Blog by Lucas Xu
 description: > # this means to ignore newlines until "Language & timezone"
   Your Site Description
 
@@ -118,7 +118,7 @@ sharing:
 ## => Comments
 ##############################
 comments:
-  provider: false # false (default), "disqus", "gitalk", "valine", "custom"
+  provider: gitalk # false (default), "disqus", "gitalk", "valine", "custom"
 
   ## Disqus
   disqus:
