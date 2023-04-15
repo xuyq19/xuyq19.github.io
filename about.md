@@ -30,7 +30,10 @@ key: page-about
 
 # whoami
 
-A bachelor from Lanzhou University majored in Computer Science. Graduate in 2024.6
+A bachelor from Lanzhou University majored in Computer Science.
+
+Graduate in 2024.6
+
 Interested in Computer System, parallel computing, Linux kernel, RISC-V etc.
 
 ```javascript
