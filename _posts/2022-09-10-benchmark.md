@@ -30,7 +30,7 @@ mathjax: true
 | ROM           | Nor Flash 128MB，接下来会用于测试                                                                             |
 | Network       | 100Mb                                                                                                        |
 | Audio         | 3.5mm CTIA                                                                                                   |
-| Button        | fel *1 + LRADC OK *1                                                                                         |
+| Button        | fel *1 + LRADC OK*1                                                                                         |
 | DEBUG         | UART + ADB USB                                                                                               |
 | POWER         | USB Type-C 5V-2A                                                                                             |
 | PCB 板层      | 6 层板                                                                                                       |
@@ -275,9 +275,9 @@ int main()
 `microbench` 详细介绍可以详见之前的文章，这里就不再赘述。引用仓库中对 RV64 平台的移植说明如下，可以看到，`microbench` 的移植过程并不复杂，只需要修改一些路径即可。
 
 ```shell
-$ make clean
-$ make ARCH=riscv64 clean
-$ make ARCH=riscv64
+make clean
+make ARCH=riscv64 clean
+make ARCH=riscv64
 ```
 
 #### UnixBench
@@ -286,17 +286,17 @@ $ make ARCH=riscv64
 
 ```shell
 ##############################################################################
-#	UnixBench v5.1.3
+# UnixBench v5.1.3
 #  Based on The BYTE UNIX Benchmarks - Release 3
 #          Module: Makefile   SID: 3.9 5/15/91 19:30:15
 #
 ##############################################################################
 # Bug reports, patches, comments, suggestions should be sent to:
-#	David C Niemi <niemi@tux.org>
+# David C Niemi <niemi@tux.org>
 #
 # Original Contacts at Byte Magazine:
-#	Ben Smith or Tom Yager at BYTE Magazine
-#	bensmith@bytepb.byte.com    tyager@bytepb.byte.com
+# Ben Smith or Tom Yager at BYTE Magazine
+# bensmith@bytepb.byte.com    tyager@bytepb.byte.com
 #
 ##############################################################################
 #  Modification Log: 7/28/89 cleaned out workload files
@@ -354,13 +354,13 @@ else
 
   ## For Linux 486/Pentium, GCC 2.7.x and 2.8.x
   #OPTON = -O2 -fomit-frame-pointer -fforce-addr -fforce-mem -ffast-math \
-  #	-m486 -malign-loops=2 -malign-jumps=2 -malign-functions=2
+  # -m486 -malign-loops=2 -malign-jumps=2 -malign-functions=2
 
   ## For Linux, GCC previous to 2.7.0
   #OPTON = -O2 -fomit-frame-pointer -fforce-addr -fforce-mem -ffast-math -m486
 
   #OPTON = -O2 -fomit-frame-pointer -fforce-addr -fforce-mem -ffast-math \
-  #	-m386 -malign-loops=1 -malign-jumps=1 -malign-functions=1
+  # -m386 -malign-loops=1 -malign-jumps=1 -malign-functions=1
 
   ## For Solaris 2, or general-purpose GCC 2.7.x
   #OPTON = -O2 -fomit-frame-pointer -fforce-addr -ffast-math -Wall
@@ -415,11 +415,11 @@ INCLDIR = /usr/include
 LIBDIR = /lib
 SCRIPTS = unixbench.logo multi.sh tst.sh index.base
 SOURCES = arith.c big.c context1.c \
-	dummy.c execl.c \
-	fstime.c hanoi.c \
-	pipe.c spawn.c \
-	syscall.c looper.c timeit.c time-polling.c \
-	dhry_1.c dhry_2.c dhry.h whets.c ubgears.c
+ dummy.c execl.c \
+ fstime.c hanoi.c \
+ pipe.c spawn.c \
+ syscall.c looper.c timeit.c time-polling.c \
+ dhry_1.c dhry_2.c dhry.h whets.c ubgears.c
 TESTS = sort.src cctest.c dc.dat large.txt
 
 ifneq (,$(GRAPHIC_TESTS))
@@ -430,37 +430,37 @@ endif
 
 # Program binaries.
 BINS = $(PROGDIR)/arithoh $(PROGDIR)/register $(PROGDIR)/short \
-	$(PROGDIR)/int $(PROGDIR)/long $(PROGDIR)/float $(PROGDIR)/double \
-	$(PROGDIR)/hanoi $(PROGDIR)/syscall $(PROGDIR)/context1 \
-	$(PROGDIR)/pipe $(PROGDIR)/spawn $(PROGDIR)/execl \
-	$(PROGDIR)/dhry2 $(PROGDIR)/dhry2reg  $(PROGDIR)/looper \
-	$(PROGDIR)/fstime $(PROGDIR)/whetstone-double $(GRAPHIC_BINS)
+ $(PROGDIR)/int $(PROGDIR)/long $(PROGDIR)/float $(PROGDIR)/double \
+ $(PROGDIR)/hanoi $(PROGDIR)/syscall $(PROGDIR)/context1 \
+ $(PROGDIR)/pipe $(PROGDIR)/spawn $(PROGDIR)/execl \
+ $(PROGDIR)/dhry2 $(PROGDIR)/dhry2reg  $(PROGDIR)/looper \
+ $(PROGDIR)/fstime $(PROGDIR)/whetstone-double $(GRAPHIC_BINS)
 ## These compile only on some platforms...
 # $(PROGDIR)/poll $(PROGDIR)/poll2 $(PROGDIR)/select
 
 # Required non-binary files.
 REQD = $(BINS) $(PROGDIR)/unixbench.logo \
-	$(PROGDIR)/multi.sh $(PROGDIR)/tst.sh $(PROGDIR)/index.base \
-	$(PROGDIR)/gfx-x11 \
-	$(TESTDIR)/sort.src $(TESTDIR)/cctest.c $(TESTDIR)/dc.dat \
-	$(TESTDIR)/large.txt
+ $(PROGDIR)/multi.sh $(PROGDIR)/tst.sh $(PROGDIR)/index.base \
+ $(PROGDIR)/gfx-x11 \
+ $(TESTDIR)/sort.src $(TESTDIR)/cctest.c $(TESTDIR)/dc.dat \
+ $(TESTDIR)/large.txt
 
 # ######################### the big ALL ############################
 all:
 ## Ick!!!  What is this about???  How about let's not chmod everything bogusly.
-#	@chmod 744 * $(SRCDIR)/* $(PROGDIR)/* $(TESTDIR)/* $(DOCDIR)/*
-	$(MAKE) distr
-	$(MAKE) programs
+# @chmod 744 * $(SRCDIR)/* $(PROGDIR)/* $(TESTDIR)/* $(DOCDIR)/*
+ $(MAKE) distr
+ $(MAKE) programs
 
 # ####################### a check for Run ######################
 check: $(REQD)
-	$(MAKE) all
+ $(MAKE) all
 # ##############################################################
 # distribute the files out to subdirectories if they are in this one
 distr:
-	@echo "Checking distribution of files"
+ @echo "Checking distribution of files"
 # scripts
-	@if  test ! -d  $(PROGDIR) \
+ @if  test ! -d  $(PROGDIR) \
         ; then  \
            mkdir $(PROGDIR) \
            ; mv $(SCRIPTS) $(PROGDIR) \
@@ -468,7 +468,7 @@ distr:
            echo "$(PROGDIR)  exists" \
         ; fi
 # C sources
-	@if  test ! -d  $(SRCDIR) \
+ @if  test ! -d  $(SRCDIR) \
         ; then  \
            mkdir $(SRCDIR) \
            ; mv $(SOURCES) $(SRCDIR) \
@@ -476,7 +476,7 @@ distr:
            echo "$(SRCDIR)  exists" \
         ; fi
 # test data
-	@if  test ! -d  $(TESTDIR) \
+ @if  test ! -d  $(TESTDIR) \
         ; then  \
            mkdir $(TESTDIR) \
            ; mv $(TESTS) $(TESTDIR) \
@@ -484,14 +484,14 @@ distr:
            echo "$(TESTDIR)  exists" \
         ; fi
 # temporary work directory
-	@if  test ! -d  $(TMPDIR) \
+ @if  test ! -d  $(TMPDIR) \
         ; then  \
            mkdir $(TMPDIR) \
         ; else \
            echo "$(TMPDIR)  exists" \
         ; fi
 # directory for results
-	@if  test ! -d  $(RESULTDIR) \
+ @if  test ! -d  $(RESULTDIR) \
         ; then  \
            mkdir $(RESULTDIR) \
         ; else \
@@ -509,7 +509,7 @@ programs: $(BINS)
 # (dependencies could be generated by modern compilers,
 #  but let's not assume modern compilers are present)
 $(PROGDIR)/%:
-	$(CC) -o $@ $(CFLAGS) $< $(LDFLAGS)
+ $(CC) -o $@ $(CFLAGS) $< $(LDFLAGS)
 
 # Individual programs
 # Sometimes the same source file is compiled in different ways.
@@ -563,22 +563,22 @@ $(PROGDIR)/ubgears: LDFLAGS += -lm $(GL_LIBS)
 $(PROGDIR)/dhry2: CFLAGS += -DHZ=${HZ}
 $(PROGDIR)/dhry2: $(SRCDIR)/dhry_1.c $(SRCDIR)/dhry_2.c \
                   $(SRCDIR)/dhry.h $(SRCDIR)/timeit.c
-	$(CC) -o $@ ${CFLAGS} $(SRCDIR)/dhry_1.c $(SRCDIR)/dhry_2.c
+ $(CC) -o $@ ${CFLAGS} $(SRCDIR)/dhry_1.c $(SRCDIR)/dhry_2.c
 
 $(PROGDIR)/dhry2reg: CFLAGS += -DHZ=${HZ} -DREG=register
 $(PROGDIR)/dhry2reg: $(SRCDIR)/dhry_1.c $(SRCDIR)/dhry_2.c \
                      $(SRCDIR)/dhry.h $(SRCDIR)/timeit.c
-	$(CC) -o $@ ${CFLAGS} $(SRCDIR)/dhry_1.c $(SRCDIR)/dhry_2.c
+ $(CC) -o $@ ${CFLAGS} $(SRCDIR)/dhry_1.c $(SRCDIR)/dhry_2.c
 
 # Run the benchmarks and create the reports
 run:
-	sh ./Run
+ sh ./Run
 
 clean:
-	$(RM) $(BINS) core *~ */*~
+ $(RM) $(BINS) core *~ */*~
 
-spotless:	clean
-	$(RM) $(RESULTDIR)/* $(TMPDIR)/*
+spotless: clean
+ $(RM) $(RESULTDIR)/* $(TMPDIR)/*
 
 ## END ##
 ```
@@ -741,7 +741,7 @@ Time consumption is: 785
 
 ### 与 Intel Core i7-4770HQ 和 Intel Core i5-8500 进行性能对比
 
-#### 与 i5-8500 测试 microbench 性能对比图表见下：
+#### 与 i5-8500 测试 microbench 性能对比图表见下
 
 | benchmark                      | time_X86_64/ns | time_rv64/ns | cpu_X86_64/ns | cpu_rv64/ns | iterations_X86_64 | iterations_rv64 | ratio_time | ratio_cpu  | ratio_iterations |
 |--------------------------------|----------------|--------------|---------------|-------------|-------------------|-----------------|------------|------------|------------------|
