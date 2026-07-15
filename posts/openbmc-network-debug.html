@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenBMC 网络模块调试指南 | 徐宇奇</title>
+    <link rel="stylesheet" href="../css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-container">
+            <a href="https://xuyq19.github.io" class="nav-logo">XYQ</a>
+            <div class="nav-links">
+                <a href="../index.html">首页</a>
+                <a href="../resume.html">简历</a>
+                <a href="index.html" class="active">文章</a>
+                <a href="https://github.com/xuyq19" target="_blank">GitHub</a>
+            </div>
+        </div>
+    </nav>
+
+    <article class="article-page">
+        <header class="article-header">
+            <h1>OpenBMC 网络模块调试指南</h1>
+            <div class="article-meta">2025.06 · 徐宇奇 · 阅读约 15 分钟</div>
+        </header>
+
+        <div class="article-content">
+            <p>在 OpenBMC 中，网络模块是服务器带外管理的核心通路。BMC 需要管理网络接口配置、NCSI 边带通道、Redfish 网络 API，以及底层 systemd-networkd 的协同工作。本文结合我在联想服务器 BMC 开发中的实际经验，梳理网络模块的架构和调试方法。</p>
+
+            <h2>一、架构概览</h2>
+            <p>OpenBMC 的网络管理涉及多个组件的协同：</p>
+            <ul>
+                <li><strong>phosphor-networkd</strong>：OpenBMC 网络管理守护进程，提供 D-Bus 接口，管理网络接口的创建、配置和删除</li>
+                <li><strong>systemd-networkd</strong>：实际执行网络配置，处理 DHCP、静态 IP、VLAN 等底层网络操作</li>
+                <li><strong>phosphor-dbus-interfaces</strong>：定义网络相关的 D-Bus 接口规范（如 EthernetInterface、NetworkInterface）</li>
+                <li><strong>bmcweb / Redfish</strong>：提供 HTTP RESTful API，将网络配置暴露给外部管理工具</li>
+            </ul>
+
+            <h2>二、NCSI 边带管理</h2>
+            <p>NCSI（Network Controller Sideband Interface）是 BMC 通过物理网卡共享网络通道的关键机制。在 Intel 服务器平台上，NCSI 通道的配置直接影响 BMC 的网络可达性。</p>
+
+            <h3>2.1 通道状态查看</h3>
+            <pre><code># 查看 NCSI 通道状态
+ip ncsi show
+
+# 查看特定接口的 NCSI 信息
+ip ncsi show eth0
+</code></pre>
+
+            <h3>2.2 常见问题排查</h3>
+            <p><strong>问题 1：BMC 无法通过共享网口获取 IP</strong></p>
+            <ul>
+                <li>检查 NCSI 通道是否被网卡正确识别：查看 dmesg 中是否有 ncsi 相关日志</li>
+                <li>确认网卡固件支持 NCSI：部分网卡需要特定固件版本才支持 NCSI over MCTP</li>
+                <li>检查 MCTP 链路是否正常：使用 mctp 工具查看 endpoint 状态</li>
+            </ul>
+
+            <h2>三、Redfish 网络接口调试</h2>
+            <p>Redfish 网络接口的标准定义在 DMTF 的 Redfish 规范中，OpenBMC 通过 bmcweb 实现。调试时需要注意几个关键点：</p>
+
+            <h3>3.1 常用 API 端点</h3>
+            <pre><code># 获取所有网络接口
+GET /redfish/v1/Systems/system/NetworkInterfaces
+
+# 获取特定接口的 Ethernet 配置
+GET /redfish/v1/Systems/system/NetworkInterfaces/{id}/EthernetInterfaces
+
+# 配置静态 IP
+PATCH /redfish/v1/Managers/bmc/NetworkProtocol
+{
+  "IPv4StaticAddresses": [{
+    "Address": "192.168.1.100",
+    "SubnetMask": "255.255.255.0",
+    "Gateway": "192.168.1.1"
+  }]
+}
+</code></pre>
+
+            <h2>四、调试工具与方法</h2>
+            <ul>
+                <li><strong>busctl</strong>：查看 D-Bus 服务状态和属性，排查 phosphor-networkd 的接口状态</li>
+                <li><strong>tcpdump</strong>：抓取 BMC 网络接口的流量，排查 DHCP 或 ARP 问题</li>
+                <li><strong>journalctl -u systemd-networkd</strong>：查看网络配置变更和 DHCP 日志</li>
+                <li><strong>ip -d link show</strong>：查看接口的详细状态（包括 VLAN、Bonding 配置）</li>
+            </ul>
+
+            <h2>五、总结</h2>
+            <p>OpenBMC 网络模块的调试核心在于理解 D-Bus 服务层（phosphor-networkd）和底层网络服务（systemd-networkd）的分工。NCSI 的问题往往出在固件层面，而 Redfish 接口的问题通常与 bmcweb 的 schema 映射有关。善用 D-Bus 调试工具和网络抓包，能极大提升问题定位效率。</p>
+        </div>
+    </article>
+
+    <footer class="footer">
+        <div class="footer-container">
+            <p>© 2025 徐宇奇 · 用技术记录成长</p>
+        </div>
+    </footer>
+</body>
+</html>

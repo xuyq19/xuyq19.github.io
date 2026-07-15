@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Linux Kernel 安全修复提交记录 | 徐宇奇</title>
+    <link rel="stylesheet" href="../css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-container">
+            <a href="https://xuyq19.github.io" class="nav-logo">XYQ</a>
+            <div class="nav-links">
+                <a href="../index.html">首页</a>
+                <a href="../resume.html">简历</a>
+                <a href="index.html" class="active">文章</a>
+                <a href="https://github.com/xuyq19" target="_blank">GitHub</a>
+            </div>
+        </div>
+    </nav>
+
+    <article class="article-page">
+        <header class="article-header">
+            <h1>Linux Kernel 安全修复提交记录</h1>
+            <div class="article-meta">2025.04 · 徐宇奇 · 阅读约 10 分钟</div>
+        </header>
+
+        <div class="article-content">
+            <p>2024-2025 年间，我向 Linux Kernel 社区提交了 6 个安全修复 Patch，涵盖 Bluetooth、WiFi、BPF、网络（RDS、rxrpc）等子系统。本文记录这些漏洞的发现和修复过程，作为给后来者的一份参考。</p>
+
+            <h2>提交概览</h2>
+
+            <table style="width:100%;border-collapse:collapse;margin:20px 0;font-size:14px;">
+                <tr style="border-bottom:2px solid #1c1917;">
+                    <th style="text-align:left;padding:10px;">日期</th>
+                    <th style="text-align:left;padding:10px;">子系统</th>
+                    <th style="text-align:left;padding:10px;">Patch 标题</th>
+                </tr>
+                <tr style="border-bottom:1px solid #e7e5e4;">
+                    <td style="padding:10px;">2025-05-29</td>
+                    <td style="padding:10px;">Bluetooth</td>
+                    <td style="padding:10px;">hci_sync: reject oversized Broadcast Announcement prepend</td>
+                </tr>
+                <tr style="border-bottom:1px solid #e7e5e4;">
+                    <td style="padding:10px;">2025-05-29</td>
+                    <td style="padding:10px;">WiFi (nl80211)</td>
+                    <td style="padding:10px;">reject oversized EMA RNR lists</td>
+                </tr>
+                <tr style="border-bottom:1px solid #e7e5e4;">
+                    <td style="padding:10px;">2025-05-27</td>
+                    <td style="padding:10px;">BPF (sockmap)</td>
+                    <td style="padding:10px;">fix tail fragment offset in bpf_msg_push_data</td>
+                </tr>
+                <tr style="border-bottom:1px solid #e7e5e4;">
+                    <td style="padding:10px;">2025-05-29</td>
+                    <td style="padding:10px;">Network (RDS)</td>
+                    <td style="padding:10px;">clear i_sends on setup unwind</td>
+                </tr>
+                <tr style="border-bottom:1px solid #e7e5e4;">
+                    <td style="padding:10px;">2025-04-13</td>
+                    <td style="padding:10px;">WiFi (cfg80211)</td>
+                    <td style="padding:10px;">reject duplicate wiphy cipher suite entries</td>
+                </tr>
+                <tr style="border-bottom:1px solid #e7e5e4;">
+                    <td style="padding:10px;">2025-04-08</td>
+                    <td style="padding:10px;">Network (rxrpc)</td>
+                    <td style="padding:10px;">reject undecryptable rxkad response tickets</td>
+                </tr>
+            </table>
+
+            <h2>漏洞类型分析</h2>
+            <p>这 6 个 Patch 都指向同一个根本问题：<strong>输入验证缺失</strong>。在底层网络协议和驱动代码中，当用户空间传递的数据包大小、数组长度或配置项超过预期时，内核没有进行充分的边界检查，导致潜在的安全风险。</p>
+
+            <h2>提交流程</h2>
+            <p>Linux Kernel 的 upstream 提交流程对于新手来说有一定的门槛：</p>
+
+            <ol>
+                <li><strong>漏洞定位</strong>：通过代码审计或 fuzzing 发现可疑的边界检查缺失</li>
+                <li><strong>修复验证</strong>：编写修复代码，在本地编译并通过内核测试套件（kselftest）</li>
+                <li><strong>邮件列表</strong>：向对应子系统的维护者发送 patch，抄送相关邮件列表（如 linux-bluetooth@vger.kernel.org）</li>
+                <li><strong>Code Review</strong>：维护者 review 代码，提出修改意见（通常 1-3 轮）</li>
+                <li><strong>合入</strong>：维护者将 patch 合入子系统 git tree，最终进入 Linus 的 mainline</li>
+            </ol>
+
+            <h2>经验总结</h2>
+            <ul>
+                <li><strong>邮件格式很重要</strong>：使用 <code>git format-patch</code> 生成的格式，确保 Subject 前缀正确（如 [PATCH net]）</li>
+                <li><strong>找对人</strong>：MAINTAINERS 文件里能找到每个子系统的维护者和邮件列表</li>
+                <li><strong>保持耐心</strong>：从提交到合入通常需要 1-4 周，大的子系统可能更久</li>
+                <li><strong>测试要充分</strong>：内核社区对回归测试要求很严格，确保修复不会引入新问题</li>
+            </ul>
+
+            <h2>相关链接</h2>
+            <ul>
+                <li><a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/log/?qt=author&q=Yuqi+Xu" target="_blank">Linux Kernel 提交记录（git.kernel.org）</a></li>
+                <li><a href="https://github.com/torvalds/linux/search?q=Yuqi+Xu&type=commits" target="_blank">GitHub Mirror 搜索</a></li>
+            </ul>
+        </div>
+    </article>
+
+    <footer class="footer">
+        <div class="footer-container">
+            <p>© 2025 徐宇奇 · 用技术记录成长</p>
+        </div>
+    </footer>
+</body>
+</html>

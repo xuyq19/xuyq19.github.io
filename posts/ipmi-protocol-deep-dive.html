@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IPMI v2.0 协议深度解析与 BMC 实现 | 徐宇奇</title>
+    <link rel="stylesheet" href="../css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-container">
+            <a href="https://xuyq19.github.io" class="nav-logo">XYQ</a>
+            <div class="nav-links">
+                <a href="../index.html">首页</a>
+                <a href="../resume.html">简历</a>
+                <a href="index.html" class="active">文章</a>
+                <a href="https://github.com/xuyq19" target="_blank">GitHub</a>
+            </div>
+        </div>
+    </nav>
+
+    <article class="article-page">
+        <header class="article-header">
+            <h1>IPMI v2.0 协议深度解析与 BMC 实现</h1>
+            <div class="article-meta">2025.03 · 徐宇奇 · 阅读约 18 分钟</div>
+        </header>
+
+        <div class="article-content">
+            <p>IPMI（Intelligent Platform Management Interface）是服务器 BMC 最传统的管理协议，至今仍在广泛使用。本文结合 OpenBMC 代码，深入解析 IPMI v2.0 的报文格式、接口类型和 BMC 实现细节。</p>
+
+            <h2>一、IPMI 报文格式</h2>
+
+            <h3>1.1 请求/响应报文结构</h3>
+            <p>IPMI 报文是一个固定格式的字节序列，包含以下字段：</p>
+            <pre><code> 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|  rsAddr   |  NetFn/LUN  |  Checksum1  |  rqAddr   |  Seq/LUN  |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|  Cmd      |  Data ...                                     |  |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|  Checksum2  |
++-+-+-+-+-+-+
+</code></pre>
+
+            <p><strong>关键字段说明：</strong></p>
+            <ul>
+                <li><strong>NetFn（Network Function）</strong>：定义命令的功能类别，如 Chassis（0x00）、Sensor/Event（0x04）、Application（0x06）</li>
+                <li><strong>LUN（Logical Unit Number）</strong>：0 = BMC，1-3 = 保留</li>
+                <li><strong>Cmd（Command）</strong>：具体命令码，如 Get Device ID（0x01）、Get Sensor Reading（0x2D）</li>
+            </ul>
+
+            <h2>二、接口类型</h2>
+
+            <p>IPMI v2.0 支持多种物理接口，BMC 通常实现其中 2-3 种：</p>
+
+            <h3>2.1 KCS（Keyboard Controller Style）</h3>
+            <p>通过 LPC 总线上的 I/O 端口（0xCA2/0xCA4）与主机 CPU 通信。这是最常见的接口，OpenBMC 的<code>kcsbridge</code>服务负责实现。</p>
+
+            <h3>2.2 BT（Block Transfer）</h3>
+            <p>也是通过 LPC 总线，但使用不同的寄存器布局（0xE4/0xE8），支持更大的数据块传输。OpenBMC 中由<code>btbridge</code>服务处理。</p>
+
+            <h3>2.3 SMBus</h3>
+            <p>通过 I2C/SMBus 总线与主机通信，常用于小型系统或嵌入式场景。OpenBMC 中由<code>smbusbridge</code>或类似服务实现。</p>
+
+            <h2>三、OpenBMC 中的实现</h2>
+
+            <p>OpenBMC 的 IPMI 处理架构分为三层：</p>
+
+            <ol>
+                <li><strong>传输层（Transport）</strong>：kcsbridge/btbridge，负责硬件接口的读写和报文收发</li>
+                <li><strong>解析层（Parser）</strong>：phosphor-ipmi-host，负责解析 IPMI 报文格式，校验 checksum，提取 NetFn/Cmd/Data</li>
+                <li><strong>处理层（Handler）</strong>：按 NetFn 分发的命令处理器，如 Sensor/Event 处理器、Chassis 处理器</li>
+            </ol>
+
+            <h3>3.1 添加自定义 OEM Command</h3>
+            <p>OpenBMC 支持通过 OEM NetFn（0x2E/0x2F）添加自定义命令。示例：</p>
+            <pre><code>// 在 phosphor-ipmi-host 中注册 OEM handler
+ipmi::registerOemHandler(
+    ipmi::prioOemBase,
+    // OEM IANA (e.g. 0x0004CE for Lenovo)
+    0x0004CE,
+    // Command number
+    0x01,
+    [](ipmi::Context::ptr&amp; ctx, const std::vector<uint8_t>&amp; data)
+    {
+        // 处理逻辑
+        return ipmi::responseSuccess();
+    },
+    ipmi::Privilege::User);
+</code></pre>
+
+            <h2>四、调试技巧</h2>
+
+            <ul>
+                <li><strong>ipmitool raw</strong>：直接发送原始 IPMI 报文，验证命令实现</li>
+                <li><strong>journalctl -u phosphor-ipmi-host</strong>：查看 IPMI 处理日志</li>
+                <li><strong>/dev/ipmi0 接口</strong>：在 Linux 主机上通过 ipmi_devintf 驱动访问 BMC</li>
+                <li><strong>逻辑分析仪</strong>：对于 KCS/BT 接口的硬件问题，用逻辑分析仪抓 LPC 总线信号最直观</li>
+            </ul>
+
+            <h2>五、总结</h2>
+            <p>IPMI 虽然协议设计年代久远，但其简单直接的报文格式和广泛的硬件支持使其仍是 BMC 管理的基石。理解 IPMI 报文结构和接口类型，对于排查 BMC 与主机通信问题至关重要。OpenBMC 的模块化设计使得添加自定义命令变得相对简单，但需要注意 NetFn 和 Cmd 的分配不要与标准冲突。</p>
+        </div>
+    </article>
+
+    <footer class="footer">
+        <div class="footer-container">
+            <p>© 2025 徐宇奇 · 用技术记录成长</p>
+        </div>
+    </footer>
+</body>
+</html>

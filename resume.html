@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>简历 | 徐宇奇</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-container">
+            <a href="index.html" class="nav-logo">XYQ</a>
+            <div class="nav-links">
+                <a href="index.html">首页</a>
+                <a href="resume.html" class="active">简历</a>
+                <a href="posts/index.html">文章</a>
+                <a href="https://github.com/xuyq19" target="_blank">GitHub</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="resume-page">
+        <div class="resume-container">
+            <header class="resume-header">
+                <h1>徐宇奇</h1>
+                <div class="resume-contact">
+                    <span>📞 189-1086-5386</span>
+                    <span>✉️ xuyq21@lenovo.com</span>
+                    <span>🌐 xuyq19.github.io</span>
+                </div>
+            </header>
+
+            <section class="resume-section">
+                <h2>教育经历</h2>
+                <div class="resume-item">
+                    <div class="resume-item-header">
+                        <span class="resume-item-title">兰州大学</span>
+                        <span class="resume-item-date">2020.09 – 2024.06</span>
+                    </div>
+                    <p>信息科学与工程学院 · 计算机科学与技术 · 本科</p>
+                </div>
+            </section>
+
+            <section class="resume-section">
+                <h2>工作经历</h2>
+                <div class="resume-item">
+                    <div class="resume-item-header">
+                        <span class="resume-item-title">联想集团 · OpenBMC 开发工程师</span>
+                        <span class="resume-item-date">2024.07 – 至今</span>
+                    </div>
+                    <ul>
+                        <li>负责 Intel Eagle Stream / Birch Stream 平台服务器 OpenBMC 固件开发与维护，主导 BMC 网络模块（phosphor-networkd、NCSI、systemd-networkd、Redfish 网络接口）的设计、开发与调试</li>
+                        <li>独立完成 Birch Stream 某 2U 通用型号服务器多个新特性（new feature）的设计与实现，包括网络功能增强、Redfish 接口扩展等，完成功能评估、开发周期估算及技术方案文档</li>
+                        <li>Redfish 接口开发：实现 EthernetInterface、NetworkInterface、NetworkProtocol 等 Redfish Schema 的网络相关接口，支持服务器带外网络管理</li>
+                        <li>OpenBMC 固件开发与维护：基于 Yocto 构建系统进行固件定制，熟悉 OpenBMC 代码架构（phosphor-dbus-interfaces、entity-manager、dbus-sensors、phosphor-networkd）</li>
+                        <li>完成 Birch Stream 2U 通用型号 PSU 适配（PMBus 协议：MFR_MODEL、输入输出电压电流功率、OVP/OCP/OTP 告警）、BMC bug fix 及产品交付</li>
+                        <li>完成 Eagle Stream 4U AI 服务器 PCIe Switch 适配（I2C MUX 管理链路、MCTP over PCIe VDM、热插拔检测）</li>
+                        <li>支持腾讯 CSP 定制项目，负责 BMC 技术讲标、现场问题排查（tcpdump 抓包、GDB 调试 D-Bus、i2c 工具排查）</li>
+                    </ul>
+                </div>
+
+                <div class="resume-item">
+                    <div class="resume-item-header">
+                        <span class="resume-item-title">中国科学院软件研究所 · RISC-V BSP 驱动开发实习</span>
+                        <span class="resume-item-date">2022.08 – 2022.11</span>
+                    </div>
+                    <ul>
+                        <li>为 RISC-V 开发板移植 Linux 系统，修改固件及相关驱动</li>
+                        <li>编写技术文档，参与开源社区代码贡献</li>
+                    </ul>
+                </div>
+            </section>
+
+            <section class="resume-section">
+                <h2>专业技能</h2>
+                <div class="skills-grid">
+                    <div class="skill-group">
+                        <h3>编程语言</h3>
+                        <p>C、C++、Python、Shell；了解 Go</p>
+                    </div>
+                    <div class="skill-group">
+                        <h3>OpenBMC / BMC 开发</h3>
+                        <p>OpenBMC 架构（phosphor-dbus-interfaces、entity-manager、dbus-sensors、phosphor-networkd）、Yocto 构建系统（bitbake、devtool、recipe）、IPMI v2.0、I2C/SMBus、MCTP、PMBus、NCSI、Redfish、D-Bus、systemd-networkd</p>
+                    </div>
+                    <div class="skill-group">
+                        <h3>Linux 内核开发</h3>
+                        <p>内核网络子系统（Bluetooth、WiFi、BPF、RDS、rxrpc）、内存管理（SLAB/SLUB）、进程调度（CFS）、中断处理（IRQ/Softirq/Workqueue）、邮件列表协作、代码 Review</p>
+                    </div>
+                    <div class="skill-group">
+                        <h3>调试与工具</h3>
+                        <p>GDB、strace、tcpdump、busctl、i2cdetect/i2cget/i2cset、ipmitool、curl/Postman、逻辑分析仪、Wireshark</p>
+                    </div>
+                    <div class="skill-group">
+                        <h3>CI/CD 与测试</h3>
+                        <p>Jenkins、Robot Framework、Google Test、sanity test、GitHub Actions</p>
+                    </div>
+                    <div class="skill-group">
+                        <h3>硬件协议</h3>
+                        <p>PCIe 链路管理、I2C MUX（PCA954x）、SPI Flash、UART 调试、DTS 设备树、MCTP over I2C/SMBus/PCIe VDM</p>
+                    </div>
+                </div>
+            </section>
+
+            <section class="resume-section">
+                <h2>开源社区贡献</h2>
+                <div class="resume-item">
+                    <p><strong>Linux Kernel 上游</strong> — 提交 6 个安全修复 Patch：</p>
+                    <ul>
+                        <li>Bluetooth: hci_sync: reject oversized Broadcast Announcement prepend</li>
+                        <li>WiFi (nl80211): reject oversized EMA RNR lists</li>
+                        <li>BPF (sockmap): fix tail fragment offset in bpf_msg_push_data</li>
+                        <li>Network (RDS): clear i_sends on setup unwind</li>
+                        <li>WiFi (cfg80211): reject duplicate wiphy cipher suite entries</li>
+                        <li>Network (rxrpc): reject undecryptable rxkad response tickets</li>
+                    </ul>
+                    <p><a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/log/?qt=author&q=Yuqi+Xu" target="_blank">查看完整提交记录 →</a></p>
+                </div>
+            </section>
+
+            <div class="resume-footer">
+                <a href="徐宇奇-OpenBMC-简历.pdf" class="btn btn-primary" download>下载 PDF 版本</a>
+            </div>
+        </div>
+    </div>
+
+    <footer class="footer">
+        <div class="footer-container">
+            <p>© 2025 徐宇奇 · 用技术记录成长</p>
+        </div>
+    </footer>
+</body>
+</html>
