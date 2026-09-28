@@ -529,6 +529,32 @@ code {
     border-radius: 100px;
 }
 
+/* Print: light theme, hide chrome, single page */
+@page { size: A4; margin: 11mm; }
+
+@media print {
+    body { background: #fff; color: #1a1a1a; font-size: 11.5px; line-height: 1.55; }
+    .nav, .footer, .resume-footer { display: none; }
+    .resume-page { padding: 0; max-width: 100%; }
+    .resume-header { border-bottom-color: #1a1a1a; margin-bottom: 14px; padding-bottom: 10px; }
+    .resume-header h1 { color: #000; font-size: 24px; margin-bottom: 6px; }
+    .resume-contact { color: #444; font-size: 12px; gap: 18px; }
+    .resume-section { margin-bottom: 14px; }
+    .resume-section h2 { color: #555; border-bottom-color: #ccc; margin-bottom: 8px; padding-bottom: 4px; font-size: 12px; }
+    .resume-item { margin-bottom: 10px; }
+    .resume-item-title { color: #000; font-size: 13px; }
+    .resume-item-date { color: #666; font-size: 11px; }
+    .resume-item p, .resume-item ul { color: #333; font-size: 12px; line-height: 1.6; }
+    .resume-item li { margin-bottom: 2px; }
+    .resume-item li::marker { color: #666; }
+    .skills-grid { gap: 8px; }
+    .skill-group { background: #f7f7f7; border-color: #e0e0e0; break-inside: avoid; padding: 10px 12px; }
+    .skill-group h3 { color: #000; font-size: 12px; margin-bottom: 3px; }
+    .skill-group p { color: #333; font-size: 11px; line-height: 1.5; }
+    a { color: #1a1a1a; text-decoration: none; }
+    code { background: #f0f0f0; border-color: #ddd; color: #1a1a1a; }
+}
+
 /* Responsive */
 @media (max-width: 640px) {
     .hero-container { flex-direction: column; gap: 32px; }

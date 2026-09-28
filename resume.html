@@ -26,8 +26,8 @@
             <header class="resume-header">
                 <h1>徐宇奇</h1>
                 <div class="resume-contact">
-                    <span>📞 189-1086-5386</span>
-                    <span>✉️ xuyq21@lenovo.com</span>
+                    <span>📞 186-0612-3867</span>
+                    <span>✉️ xuyuqiabc@gmail.com</span>
                     <span>🌐 xuyq19.github.io</span>
                 </div>
             </header>
@@ -51,21 +51,30 @@
                         <span class="resume-item-date">2024.07 – 至今</span>
                     </div>
                     <ul>
-                        <li>负责 Intel Eagle Stream / Birch Stream 平台服务器 OpenBMC 固件开发与维护，主导 BMC 网络模块（phosphor-networkd、NCSI、Redfish 网络接口）的设计与开发</li>
-                        <li>独立完成 Birch Stream 2U 通用型号多个新特性：网络功能增强、Redfish 接口扩展（EthernetInterface、NetworkInterface、NetworkProtocol 等 Schema），覆盖功能评估、周期估算、方案文档与交付</li>
-                        <li>完成 2U 通用型号 PSU 适配（PMBus：MFR_MODEL、电压/电流/功率监控、OVP/OCP/OTP 告警）与 4U AI 服务器 PCIe Switch 适配（I2C MUX、MCTP over PCIe VDM、热插拔检测）</li>
-                        <li>支持 CSP 定制项目，负责 BMC 技术讲标与现场问题排查（tcpdump 抓包、GDB 调试 D-Bus、i2c 工具）</li>
+                        <li>负责 Intel Eagle Stream / Birch Stream 平台服务器 OpenBMC 固件开发与维护，主导 BMC 网络模块（phosphor-networkd、NCSI、Redfish 网络接口）的设计与实现</li>
+                        <li>独立完成 Birch Stream 2U 通用型号多项新特性开发，包括网络功能增强与 Redfish 接口扩展（EthernetInterface、NetworkProtocol 等 Schema），负责功能评估、开发周期估算与技术方案制定</li>
+                        <li>完成 2U 机型 PSU 适配（PMBus：电压/电流/功率监控及 OVP/OCP/OTP 告警）与 4U AI 服务器 PCIe Switch 适配（I2C MUX、MCTP over PCIe VDM、热插拔检测）</li>
+                        <li>支持 CSP 定制项目，负责 BMC 技术讲标及现场问题定位（tcpdump、GDB 调试 D-Bus、i2c 工具链）</li>
                     </ul>
                 </div>
 
                 <div class="resume-item">
                     <div class="resume-item-header">
-                        <span class="resume-item-title">中国科学院软件研究所 · RISC-V BSP 驱动开发实习</span>
+                        <span class="resume-item-title">中国科学院软件研究所 · RISC-V BSP 驱动开发（实习）</span>
                         <span class="resume-item-date">2022.08 – 2022.11</span>
                     </div>
                     <ul>
-                        <li>为 RISC-V 开发板移植 Linux 系统，修改固件及相关驱动</li>
-                        <li>编写技术文档，参与开源社区代码贡献</li>
+                        <li>负责 RISC-V 开发板 Linux 系统移植、固件与驱动调试，参与开源社区代码贡献</li>
+                    </ul>
+                </div>
+            </section>
+
+            <section class="resume-section">
+                <h2>开源社区贡献</h2>
+                <div class="resume-item">
+                    <ul>
+                        <li><strong>Linux Kernel 上游</strong>：9 个安全修复 Patch 合入主线（torvalds/linux），覆盖网络（Open vSwitch、RDS、rxrpc、ipconfig）、无线（cfg80211/nl80211）、BPF、Bluetooth 等子系统；另有 TIPC、mac80211、TPM、KEYS 等修复已进入 maintainer 树。提交记录：<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/log/?qt=author&q=Yuqi+Xu" target="_blank" rel="noopener">git.kernel.org（作者 Yuqi Xu）</a></li>
+                        <li><strong>OpenBMC 上游</strong>：向 phosphor-networkd、phosphor-host-ipmid 提交问题报告 2 项（GitHub: <a href="https://github.com/xuyq19" target="_blank" rel="noopener">xuyq19</a>）</li>
                     </ul>
                 </div>
             </section>
@@ -74,61 +83,33 @@
                 <h2>专业技能</h2>
                 <div class="skills-grid">
                     <div class="skill-group">
-                        <h3>编程语言</h3>
-                        <p>C、C++、Python、Shell；了解 Go</p>
-                    </div>
-                    <div class="skill-group">
                         <h3>OpenBMC / BMC 开发</h3>
-                        <p>OpenBMC 架构（phosphor-dbus-interfaces、entity-manager、dbus-sensors、phosphor-networkd）、Yocto 构建系统（bitbake、devtool、recipe）、IPMI v2.0、I2C/SMBus、MCTP、PMBus、NCSI、Redfish、D-Bus、systemd-networkd</p>
+                        <p>OpenBMC 架构（phosphor-dbus-interfaces、entity-manager、dbus-sensors、phosphor-networkd）、Yocto 构建系统、Redfish、IPMI、NCSI、MCTP、PMBus、D-Bus</p>
                     </div>
                     <div class="skill-group">
                         <h3>Linux 内核开发</h3>
-                        <p>内核网络子系统（Bluetooth、WiFi、BPF、RDS、rxrpc）、内存管理（SLAB/SLUB）、进程调度（CFS）、中断处理（IRQ/Softirq/Workqueue）、邮件列表协作、代码 Review</p>
+                        <p>网络与无线子系统、BPF、KASAN、QEMU/KVM 验证、邮件列表协作与代码 Review</p>
+                    </div>
+                    <div class="skill-group">
+                        <h3>编程语言</h3>
+                        <p>C、C++、Python、Shell</p>
                     </div>
                     <div class="skill-group">
                         <h3>调试与工具</h3>
-                        <p>GDB、strace、tcpdump、busctl、i2cdetect/i2cget/i2cset、ipmitool、curl/Postman、逻辑分析仪、Wireshark</p>
+                        <p>GDB、strace、tcpdump、Wireshark、busctl、i2c-tools、ipmitool</p>
                     </div>
-                    <div class="skill-group">
-                        <h3>CI/CD 与测试</h3>
-                        <p>Jenkins、Robot Framework、Google Test、sanity test、GitHub Actions</p>
-                    </div>
-                    <div class="skill-group">
-                        <h3>硬件协议</h3>
-                        <p>PCIe 链路管理、I2C MUX（PCA954x）、SPI Flash、UART 调试、DTS 设备树、MCTP over I2C/SMBus/PCIe VDM</p>
-                    </div>
-                </div>
-            </section>
-
-            <section class="resume-section">
-                <h2>开源社区贡献</h2>
-                <div class="resume-item">
-                    <p><strong>Linux Kernel 上游</strong> — 9 个安全修复 Patch 已合入主线（mainline）：</p>
-                    <ul>
-                        <li>openvswitch: Fix CT limit teardown use-after-free</li>
-                        <li>net: ipconfig: bound DHCP option construction</li>
-                        <li>net: rds: clear i_sends on setup unwind</li>
-                        <li>net (rxrpc): reject undecryptable rxkad response tickets</li>
-                        <li>wifi (nl80211): reject oversized EMA RNR lists</li>
-                        <li>wifi (cfg80211): reject duplicate wiphy cipher suite entries</li>
-                        <li>bpf: Check params size before reading reserved fields</li>
-                        <li>bpf (sockmap): fix tail fragment offset in bpf_msg_push_data</li>
-                        <li>Bluetooth: hci_sync: reject oversized Broadcast Announcement prepend</li>
-                    </ul>
-                    <p>另有 TIPC、mac80211、TPM、KEYS 等子系统的修复已进入 maintainer 树。</p>
-                    <p><a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/log/?qt=author&q=Yuqi+Xu" target="_blank">查看完整提交记录 →</a></p>
                 </div>
             </section>
 
             <div class="resume-footer">
-                <a href="徐宇奇-OpenBMC-简历.pdf" class="btn btn-primary" download>下载 PDF 版本</a>
+                <a href="YuqiXu_resume.pdf" class="btn btn-primary" download>下载 PDF 版本</a>
             </div>
         </div>
     </div>
 
     <footer class="footer">
         <div class="footer-container">
-            <p>© 2026 徐宇奇 · 用技术记录成长</p>
+            <p>© 2026 徐宇奇</p>
         </div>
     </footer>
 </body>

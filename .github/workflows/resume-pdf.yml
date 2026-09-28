@@ -1,0 +1,48 @@
+name: Build resume PDF
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - resume.html
+      - css/style.css
+      - .github/workflows/resume-pdf.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  pdf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
+
+      - name: Install CJK fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-noto-cjk
+
+      - name: Generate PDF
+        run: |
+          "${{ steps.chrome.outputs.chrome-path }}" \
+            --headless=new --disable-gpu --no-sandbox \
+            --no-pdf-header-footer \
+            --virtual-time-budget=10000 \
+            --print-to-pdf="$GITHUB_WORKSPACE/YuqiXu_resume.pdf" \
+            "file://$GITHUB_WORKSPACE/resume.html"
+
+      - name: Commit PDF if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add YuqiXu_resume.pdf
+          if git diff --cached --quiet; then
+            echo "PDF unchanged"
+          else
+            git commit -m "Auto-update YuqiXu_resume.pdf"
+            git push
+          fi
