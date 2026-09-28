@@ -28,6 +28,12 @@
             <p class="section-lede">Notes on Linux kernel bugs I have found and fixed. Dates are when the first version of each patch was posted to the mailing list.</p>
             <div class="post-list">
                 <div class="post-card">
+                    <div class="post-date">2026-09-18</div>
+                    <h3 class="post-title"><a href="elan0662-touchpad-100khz.html">When your touchpad lies to the kernel: fixing an ELAN0662 at 400 kHz</a></h3>
+                    <p class="post-excerpt">My own laptop's touchpad stuttered and dropped touches. The trail led from a libinput "Touch jump" warning, through a byte-level dissection of the ACPI DSDT, to a failed first fix (kernel OEM-revision rules), and finally a one-line upstream patch. Full detective story with every command and log line.</p>
+                    <div class="post-tags"><span class="tag">i2c</span><span class="tag">acpi</span><span class="tag">dsdt</span><span class="tag">touchpad</span></div>
+                </div>
+                <div class="post-card">
                     <div class="post-date">2026-07-22</div>
                     <h3 class="post-title"><a href="ovs-ct-limit-uaf.html">Fixing a use-after-free in Open vSwitch conntrack zone limits</a></h3>
                     <p class="post-excerpt">Packet processing reads CT limit state under RCU while netns teardown frees it under a mutex — with no grace period in between. How an unprivileged user could turn that into a slab-use-after-free, and how the fix restructures the teardown.</p>

@@ -29,17 +29,81 @@
         </header>
 
         <div class="article-content">
-            <p>When a wireless driver registers with cfg80211, it describes its capabilities in a <code>struct wiphy</code> — including the list of supported cipher suites. This post is about what happens when that list contains duplicates, and why the right place to reject them is at registration, not in every consumer.</p>
+            <p>When a wireless driver registers with cfg80211, it describes its hardware in a <code>struct wiphy</code>. Among dozens of fields — supported bands, interface modes, bitrate tables — there is a small list of cipher suites the hardware can do: TKIP, CCMP, the two WEP variants, and a handful of others. This post walks through a bug where cfg80211 blindly accepted <em>duplicate</em> entries in that list, how that breaks the ancient WEXT compatibility layer with an out-of-bounds write, and why the fix I sent upstream rejects the malformed description at registration time rather than patching the one consumer that happened to blow up.</p>
 
             <h2>The bug</h2>
-            <p>Duplicate entries in <code>wiphy-&gt;cipher_suites</code> don't describe any additional capability — a cipher either is or isn't supported. But cfg80211 accepted them silently, leaving each consumer of the list to cope on its own.</p>
-            <p>One consumer that couldn't cope: the WEXT compatibility code. The ancient <code>SIOCGIWRANGE</code> ioctl reports supported encryptions through a fixed-size array, <code>iw_range::encoding_size</code>. The compat code appends one WEP key length <em>for every WEP cipher entry it sees</em>. Repeat a WEP entry enough times in the wiphy description, and the appends walk straight past the end of the array — a stack/heap-adjacent overflow triggered simply by registering a malformed device description.</p>
+            <p>The cipher suite list is conceptually a <em>set</em>: a cipher either is or isn't supported by the device. Listing <code>WLAN_CIPHER_SUITE_WEP104</code> twice does not mean "this device supports WEP104 twice as much". It means the driver's description is malformed — usually a copy-paste slip in a static array, or two feature blocks that both appended the same cipher.</p>
+            <p>cfg80211, however, performed no such check. A driver could register with any number of duplicates and the kernel happily carried the list around, leaving every consumer to interpret it on its own. Most consumers treat the list as a set and are unaffected. At least one treats it as a sequence and appends state per entry — and that one had a fixed-size destination buffer.</p>
+            <p>The commit message states the problem compactly:</p>
+            <pre><code>Duplicate entries in wiphy-&gt;cipher_suites do not describe any
+additional capability, but cfg80211 currently accepts them and leaves
+individual consumers to deal with them.
 
-            <h2>Why not fix WEXT?</h2>
-            <p>Patching the WEXT code to deduplicate would have fixed <em>that</em> overflow, but it leaves the underlying problem in place: a malformed input is accepted at the boundary and every future consumer has to remember to defend itself. The better invariant is to make the input itself illegal.</p>
+One such consumer is the WEXT compatibility code, which appends a WEP
+key length for each WEP cipher entry it sees. Repeated WEP entries can
+therefore overflow the fixed iw_range::encoding_size array returned by
+SIOCGIWRANGE.</code></pre>
+            <p>So the bug has two halves: (1) cfg80211 accepts a description that carries no valid meaning, and (2) at least one consumer of that description writes past a fixed-size array when the duplicates are WEP entries. The second half is the exploitable symptom; the first half is the root cause.</p>
+
+            <h2>The consumer that couldn't cope</h2>
+            <p>Wireless Extensions (WEXT) is the pre-nl80211 userspace API. Modern tools talk netlink, but the <code>SIOCGIWRANGE</code> ioctl still works — cfg80211 keeps a compatibility shim in <code>net/wireless/wext-compat.c</code> so that old binaries keep functioning. The handler is <code>cfg80211_wext_giwrange()</code>, hooked into the WEXT handler table at the bottom of the file:</p>
+            <pre><code>IW_HANDLER(SIOCGIWRANGE,	cfg80211_wext_giwrange),</code></pre>
+            <p>Any process can reach it: open a socket, issue <code>ioctl(fd, SIOCGIWRANGE, &amp;wrq)</code> on a wireless interface. No special privilege is needed for a "get range" query. The handler fills a <code>struct iw_range</code> in kernel memory and copies it back to userspace.</p>
+
+            <h3>The fixed-size array</h3>
+            <p><code>struct iw_range</code> is a uapi structure, frozen in <code>include/uapi/linux/wireless.h</code> since the 1990s. The "encoder stuff" section looks like this:</p>
+            <pre><code>#define IW_MAX_ENCODING_SIZES	8
+
+/* Encoder stuff */
+__u16	encoding_size[IW_MAX_ENCODING_SIZES];	/* Different token sizes */
+__u8	num_encoding_sizes;	/* Number of entry in the list */
+__u8	max_encoding_tokens;	/* Max number of tokens */</code></pre>
+            <p>That is eight <code>__u16</code> slots — sixteen bytes — with the count sitting <em>immediately after</em> the array, followed by the rest of the structure. There is no capacity field; the layout is ABI and cannot grow.</p>
+
+            <h3>The append loop</h3>
+            <p>Inside <code>cfg80211_wext_giwrange()</code>, the cipher suite list is iterated once, and each entry maps to WEXT flags. TKIP and CCMP just OR bits into <code>enc_capa</code> — idempotent, harmless under duplication. The WEP cases are different: they <em>append</em>:</p>
+            <pre><code>for (i = 0; i &lt; wdev-&gt;wiphy-&gt;n_cipher_suites; i++) {
+	switch (wdev-&gt;wiphy-&gt;cipher_suites[i]) {
+	case WLAN_CIPHER_SUITE_TKIP:
+		range-&gt;enc_capa |= (IW_ENC_CAPA_CIPHER_TKIP |
+				    IW_ENC_CAPA_WPA);
+		break;
+
+	case WLAN_CIPHER_SUITE_CCMP:
+		range-&gt;enc_capa |= (IW_ENC_CAPA_CIPHER_CCMP |
+				    IW_ENC_CAPA_WPA2);
+		break;
+
+	case WLAN_CIPHER_SUITE_WEP40:
+		range-&gt;encoding_size[range-&gt;num_encoding_sizes++] =
+			WLAN_KEY_LEN_WEP40;
+		break;
+
+	case WLAN_CIPHER_SUITE_WEP104:
+		range-&gt;encoding_size[range-&gt;num_encoding_sizes++] =
+			WLAN_KEY_LEN_WEP104;
+		break;
+	}
+}</code></pre>
+            <p>There is no bounds check against <code>IW_MAX_ENCODING_SIZES</code>. The code assumes — reasonably, before this bug class existed — that the wiphy description contains each cipher at most once, so the loop can write at most two entries (WEP40 and WEP104) into an array of eight.</p>
+            <p>Now connect the two halves. If <code>wiphy-&gt;cipher_suites</code> contains nine <code>WLAN_CIPHER_SUITE_WEP104</code> entries — which cfg80211 accepted without complaint — the ninth iteration writes <code>encoding_size[8]</code>, one slot past the end, and increments <code>num_encoding_sizes</code> past the true count. The overflow target is the very next field in the struct (<code>num_encoding_sizes</code>, <code>max_encoding_tokens</code>, <code>encoding_login_index</code>...), and with enough duplicates the writes march through the remainder of <code>struct iw_range</code>. The <code>range</code> buffer lives inside the ioctl handling path; what exactly gets corrupted depends on the call site's allocation, but "uncontrolled count of <code>__u16</code> writes past a uapi struct, reachable by an unprivileged ioctl, parameterized by a driver-supplied list" is a bad sentence in any dialect.</p>
+            <p>Two things make this worse than it first looks. First, the duplicated list does not have to come from a malicious actor at runtime — it is a static description authored by the driver (or firmware abstraction layer) and registered once, so a single buggy or compromised driver registration permanently arms the overflow for every later <code>SIOCGIWRANGE</code> call on that device. Second, the trigger and the mistake are far apart: the overflow fires in a legacy ioctl handler, while the actual error was accepting the malformed list in <code>wiphy_register()</code>, potentially much earlier.</p>
+
+            <h2>Why not patch WEXT</h2>
+            <p>The obvious one-liner would be to bound the loop:</p>
+            <pre><code>if (range-&gt;num_encoding_sizes &lt; IW_MAX_ENCODING_SIZES)
+	range-&gt;encoding_size[range-&gt;num_encoding_sizes++] = ...;</code></pre>
+            <p>That fixes <em>this</em> overflow, and nothing else. It leaves the invariant broken: cfg80211 would still accept a description containing data that means nothing, and every other consumer — present and future — still has to decide for itself what duplicates mean. Consider what else reads the list:</p>
+            <ul>
+                <li><code>cfg80211_supported_cipher_suite()</code> in <code>net/wireless/util.c</code> does a linear set-membership scan; duplicates are harmless there.</li>
+                <li><code>nl80211.c</code> copies the whole array verbatim into the <code>NL80211_ATTR_CIPHER_SUITES</code> netlink attribute, so userspace sees the duplicates too and has to cope.</li>
+                <li>The WEXT range handler, as shown, appends per entry and overflows.</li>
+            </ul>
+            <p>That spread is the point. The semantics of the list are "set of supported ciphers", but the representation is "array the driver handed us, whatever's in it". Every consumer has to re-derive the set semantics, and as WEXT demonstrates, getting it wrong is a memory-safety bug, not just a cosmetic one. Deduplicating in WEXT would also leave a subtler question unanswered: should WEXT dedup? Should nl80211 dedup before copying to userspace? Should each of them silently paper over driver bugs differently?</p>
+            <p>The cleaner invariant is to make the malformed input illegal at the boundary where it enters the subsystem. Then "no duplicates" stops being an assumption scattered across consumers and becomes a guaranteed property of any registered wiphy, provable by pointing at one check in one function. This is the same reason <code>wiphy_register()</code> already rejects empty channel lists, bad band/rate combinations, and inconsistent interface mode masks — the registration path is exactly where cfg80211 enforces that driver descriptions are sane.</p>
 
             <h2>The fix</h2>
-            <p>Validate the cipher suite list once, in <code>wiphy_register()</code>, and fail early:</p>
+            <p>The patch adds one helper and one call site in <code>net/wireless/core.c</code>. The helper, placed right after <code>wiphy_verify_combinations()</code> — the existing "validate the driver's description" function — is:</p>
             <pre><code>static bool wiphy_cipher_suites_valid(const struct wiphy *wiphy)
 {
 	int i, j;
@@ -47,19 +111,78 @@
 	if (wiphy-&gt;n_cipher_suites &amp;&amp; !wiphy-&gt;cipher_suites)
 		return false;
 
-	for (i = 0; i &lt; wiphy-&gt;n_cipher_suites; i++)
-		for (j = 0; j &lt; i; j++)
+	for (i = 0; i &lt; wiphy-&gt;n_cipher_suites; i++) {
+		for (j = 0; j &lt; i; j++) {
 			if (wiphy-&gt;cipher_suites[i] ==
 			    wiphy-&gt;cipher_suites[j])
 				return false;
+		}
+	}
 
 	return true;
 }</code></pre>
-            <p>A malformed wiphy description now fails registration with <code>-EINVAL</code>, right where the driver author will notice it, instead of corrupting memory in a legacy ioctl handler far away from the actual mistake. The list is short and registration is a cold path, so the O(n²) check costs nothing in practice.</p>
+            <p>And the call site, inside <code>wiphy_register()</code> immediately after <code>wiphy_verify_combinations()</code> succeeds:</p>
+            <pre><code>	res = wiphy_verify_combinations(wiphy);
+	if (res)
+		return res;
+
+	if (!wiphy_cipher_suites_valid(wiphy))
+		return -EINVAL;
+
+	/* sanity check supported bands/channels */</code></pre>
+
+            <h3>The NULL-vs-count check</h3>
+            <p>The first condition handles an inconsistency that has nothing to do with duplicates: <code>n_cipher_suites != 0</code> with a NULL <code>cipher_suites</code> pointer. That combination is how you get a NULL dereference in every consumer shown above — each loop indexes <code>cipher_suites[i]</code> up to the count. Catching it here converts an oops at first use into a clean <code>-EINVAL</code> at registration. (The reverse — non-NULL pointer with zero count — is harmless: every loop body runs zero times, so the patch leaves it alone. Minimal checks for real problems.)</p>
+
+            <h3>The O(n²) duplicate loop</h3>
+            <p>The nested loop is a straightforward all-pairs comparison: for each element, compare against every earlier element and fail on the first match. One could ask why not sort a copy and compare neighbors, or use a bitmap keyed by cipher ID. The answer is that this list is tiny — real drivers advertise somewhere between two and a dozen suites — and <code>wiphy_register()</code> runs once per device, at probe time, never in a hot path. An O(n²) scan over eight integers is a few dozen cycles of predictable, obviously-correct code. Sorting would add allocation and comparison machinery; a bitmap would need a bound on valid cipher IDs. Both buy performance nobody needs at the cost of code somebody has to review. This is the right kind of dumb.</p>
+
+            <h3>Failing early with -EINVAL</h3>
+            <p>The call site placement matters. It sits before the band/channel sanity checks and long before any state is committed — before the wiphy is visible to userspace, before rfkill registration, before any netdev exists. A driver with a malformed list simply fails to probe, with <code>-EINVAL</code> returned to its <code>wiphy_register()</code> call. The failure is loud, immediate, and attributed to the right place: the driver's own description, not a crash in an unrelated ioctl handler weeks later. Driver authors testing against a patched cfg80211 find their copy-paste error on the first insmod.</p>
+
+            <h2>How it was investigated</h2>
+            <p>Credit where due: the issue was reported by Yifan Wu and Juefei Pu, and the fix direction — reject at registration rather than patch the consumer — was suggested by Xin Liu. My part was tracing the data flow to confirm the report, checking whether other consumers had the same shape, and writing the patch. Concretely, that meant a few hours with grep.</p>
+            <p>First, find every writer and reader of the encoding-size array to confirm the overflow and see if it was duplicated anywhere else:</p>
+            <pre><code>$ grep -rn "encoding_size" net/wireless/
+net/wireless/wext-compat.c:174:			range-&gt;encoding_size[range-&gt;num_encoding_sizes++] =
+net/wireless/wext-compat.c:179:			range-&gt;encoding_size[range-&gt;num_encoding_sizes++] =</code></pre>
+            <p>Only one consumer appends — good, the blast radius is one function. Then confirm the array really is fixed-size and uapi-frozen:</p>
+            <pre><code>$ grep -n "IW_MAX_ENCODING_SIZES" include/uapi/linux/wireless.h
+482:#define IW_MAX_ENCODING_SIZES	8</code></pre>
+            <p>Next, walk the other readers of <code>cipher_suites</code> to see whether the WEXT pattern — append per entry into a bounded destination — exists elsewhere:</p>
+            <pre><code>$ grep -rn "cipher_suites" net/wireless/ | grep -v wext-compat
+net/wireless/nl80211.c:3138:			    sizeof(u32) * rdev-&gt;wiphy.n_cipher_suites,
+net/wireless/nl80211.c:3139:			    rdev-&gt;wiphy.cipher_suites))
+net/wireless/nl80211.c:12832:		for (i = 0; i &lt; rdev-&gt;wiphy.n_cipher_suites; i++) {
+net/wireless/nl80211.c:12833:			if (key.p.cipher == rdev-&gt;wiphy.cipher_suites[i]) {
+net/wireless/util.c:238:	for (i = 0; i &lt; wiphy-&gt;n_cipher_suites; i++)
+net/wireless/util.c:239:		if (cipher == wiphy-&gt;cipher_suites[i])</code></pre>
+            <p>The nl80211 site at 3138 copies the raw list into a netlink attribute sized by the same count — internally consistent, no overflow, but it <em>does</em> leak the duplicates to userspace, which strengthened the case for fixing the input rather than each reader. The other sites are membership scans, safe under duplication. So WEXT was the only memory-corrupting consumer, but not the only affected one.</p>
+            <p>Finally, look at how drivers actually build the list, to sanity-check that rejecting duplicates wouldn't break legitimate hardware. A typical example, from <code>drivers/net/wireless/ath/wcn36xx/main.c</code>:</p>
+            <pre><code>static const u32 cipher_suites[] = {
+	WLAN_CIPHER_SUITE_WEP40,
+	WLAN_CIPHER_SUITE_WEP104,
+	WLAN_CIPHER_SUITE_TKIP,
+	WLAN_CIPHER_SUITE_CCMP,
+};
+...
+wcn-&gt;hw-&gt;wiphy-&gt;cipher_suites = cipher_suites;
+wcn-&gt;hw-&gt;wiphy-&gt;n_cipher_suites = ARRAY_SIZE(cipher_suites);</code></pre>
+            <p>A short static array, hand-written per driver. Duplicates in such a table are never intentional — there is no encoding of "capability" that requires repetition — so a hard rejection breaks no valid use case. With that confirmed, the patch wrote itself: one helper, one call site, and a commit message pointing at the WEXT overflow as the motivating consumer.</p>
 
             <h2>Upstream</h2>
-            <p>Merged by Johannes Berg as <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=7187d145d9042b037e4f10538f70cf95e380219f" target="_blank" rel="noopener">7187d145d904</a> ("wifi: cfg80211: reject duplicate wiphy cipher suite entries").</p>
-            <p>Takeaway: validate invariants at the boundary where data enters the subsystem. One check at registration beats N defensive checks scattered across consumers — including the ones nobody has written yet.</p>
+            <p>The patch was first posted on 2026-04-13 and applied by Johannes Berg, landing in mainline on 2026-04-28 as <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=7187d145d9042b037e4f10538f70cf95e380219f" target="_blank" rel="noopener">commit 7187d145d904</a> ("wifi: cfg80211: reject duplicate wiphy cipher suite entries"). It was a fast, quiet review — the fix is small and the reasoning is hard to argue with.</p>
+            <p>The full credits from the commit message:</p>
+            <ul>
+                <li>Reported-by: Yifan Wu and Juefei Pu — found and reported the issue.</li>
+                <li>Co-developed-by / Signed-off-by: Yuan Tan — worked on the fix with me.</li>
+                <li>Suggested-by: Xin Liu — suggested rejecting the duplicates at registration rather than patching the consumer.</li>
+                <li>Signed-off-by: Ren Wei and myself.</li>
+                <li>Signed-off-by: Johannes Berg — applied it.</li>
+            </ul>
+
+            <h2>Takeaway</h2>
+            <p>Validate invariants where data enters the subsystem. <code>cipher_suites</code> is a set; the moment cfg80211 started enforcing that at <code>wiphy_register()</code>, every consumer — the WEXT shim, the nl80211 dump, and all the code that will be written against this API in the future — got the guarantee for free. One check at the boundary beats N defensive checks scattered across consumers, especially when one of those consumers is a legacy compatibility layer that nobody wants to touch and everybody forgets to audit.</p>
         </div>
     </div>
 

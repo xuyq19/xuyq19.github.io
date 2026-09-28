@@ -29,28 +29,153 @@
         </header>
 
         <div class="article-content">
-            <p>Some of the most satisfying kernel fixes are one-liners. This is the story of one in the sockmap BPF helper <code>bpf_msg_push_data()</code>, where a single wrong operand corrupted the scatterlist layout of a socket message.</p>
+            <p>Some of the most satisfying kernel fixes are one-liners. This is the story of one I landed in the sockmap BPF helper <code>bpf_msg_push_data()</code>: a single wrong operand in <code>net/core/filter.c</code> that corrupted the scatterlist layout of a socket message every time data was inserted into the middle of a non-first scatterlist entry. The bug was born with the helper itself in October 2018 and survived for about seven and a half years, hidden by the fact that the most common use case — prepending a header at offset zero — never triggers it.</p>
+            <p>This writeup walks through the whole thing slowly: what the helper does, how the entry-splitting path works, exactly which coordinate system each variable lives in, a concrete numeric walkthrough of the corruption, the one-line fix, and how I confirmed through git archaeology that the bug was there from day one.</p>
 
-            <h2>What the helper does</h2>
-            <p><code>bpf_msg_push_data()</code> lets a sk_msg BPF program insert bytes into the middle of a message. Messages are stored as a scatterlist of page fragments. When the insertion point falls inside an existing SG entry, the helper splits that entry in two: a <em>left fragment</em> covering everything before the insertion point, and a <em>right fragment</em> covering everything after it.</p>
+            <h2>What bpf_msg_push_data() does</h2>
+            <p>Sockmap (and its companion sk_msg program type) is a BPF-based framework for steering and transforming socket payloads in the kernel. A sk_msg BPF program is attached to a socket map and runs when a message is sent; through a set of helpers it can inspect and reshape the in-flight message. One of those helpers is <code>bpf_msg_push_data()</code>, introduced by John Fastabend in commit <code>6fff607e2f14</code> ("bpf: sk_msg program helper bpf_msg_push_data", 2018):</p>
+            <pre><code>bpf_msg_push_data(msg, offset, len, flags)</code></pre>
+            <p>It inserts <code>len</code> bytes into the message at byte position <code>offset</code>. The canonical example from the original commit message is prepending 10 bytes at the front:</p>
+            <pre><code>bpf_msg_push_data(msg, 0, 10, 0);</code></pre>
+            <p>After the call, the message size has grown by <code>len</code>, the newly inserted region is writable scratch space the BPF program can fill, and — importantly — the packet's data pointers (<code>data</code> / <code>data_end</code>) have been invalidated, so the program must redo all bounds checks. This is the mechanism sk_msg programs use to inject metadata headers, much like XDP metadata, to pass information between the sk_msg layer and lower layers.</p>
+            <p>Internally, a sk_msg message is not a flat buffer. It is a ring of scatterlist entries (<code>msg-&gt;sg.data[]</code>), where each entry describes one page fragment: a struct page pointer, a <strong>page-local</strong> <code>offset</code> saying where inside that page the fragment begins, and a <code>length</code>. The logical message byte stream is the concatenation of all these fragments, walked via <code>sk_msg_iter_var_next()</code> around the ring between <code>msg-&gt;sg.start</code> and <code>msg-&gt;sg.end</code>.</p>
+            <p>So "insert <code>len</code> bytes at offset <code>start</code>" decomposes into a few cases:</p>
+            <ul>
+                <li>If the ring is full (no free SG slots), the helper falls back to a <strong>copy path</strong>: it allocates one new page, memcpy's the split-out entry around the inserted gap into it, and replaces the entry wholesale. This path is slow but simple, and it is not where the bug lives.</li>
+                <li>If there is ring space and <code>start</code> lands exactly on an entry boundary (including offset 0, the header-prepend case), the helper just shifts entries and drops a new SG slot for the inserted page. No existing entry is modified.</li>
+                <li>If there is ring space and <code>start</code> lands <strong>strictly inside</strong> an existing entry, that entry must be <strong>split in two</strong>: a left fragment covering the bytes before the insertion point, and a right fragment covering the bytes after it. The new data gets its own fresh slot wedged between them.</li>
+            </ul>
+            <p>The third case — the split path — is where the bug lived.</p>
 
-            <h2>The bug</h2>
-            <p>The split code adjusts the right fragment like this:</p>
-            <pre><code>psge-&gt;length = start - offset;
-rsge.length -= psge-&gt;length;
-rsge.offset += start;</code></pre>
-            <p>The problem is the last line. <code>rsge.offset</code> is <strong>page-local</strong> — an offset inside the page backing that SG entry. But <code>start</code> is <strong>message-global</strong> — the insertion point counted from the beginning of the whole message, spanning however many SG entries came before.</p>
-            <p>For an insertion into the very first SG entry the two happen to coincide (<code>offset == 0</code>), so the bug hides. For any later entry, the offset is advanced by far too much, and the split layout becomes inconsistent: the right fragment points somewhere past where it should, and the bytes don't add up.</p>
+            <h2>The split path</h2>
+            <p>Here is the relevant part of the function as it existed just before the fix (parent of <code>f72eed9b84fb</code>). First, the helper walks the ring to locate the entry containing the insertion point:</p>
+            <pre><code>/* First find the starting scatterlist element */
+i = msg-&gt;sg.start;
+do {
+	offset += l;
+	l = sk_msg_elem(msg, i)-&gt;length;
+
+	if (start &lt; offset + l)
+		break;
+	sk_msg_iter_var_next(i);
+} while (i != msg-&gt;sg.end);
+
+if (start &gt; offset + l)
+	return -EINVAL;</code></pre>
+            <p>This loop establishes the two coordinate systems that matter for everything that follows:</p>
+            <ul>
+                <li><code>start</code> is <strong>message-global</strong>: the insertion point counted from byte 0 of the whole message, spanning however many SG entries came before.</li>
+                <li><code>offset</code>, when the loop breaks, is also message-global: it is the message-global position of the <em>beginning</em> of the entry we broke on — the sum of the lengths of all preceding entries.</li>
+                <li><code>l</code> is the length of that entry.</li>
+            </ul>
+            <p>So after the loop, the insertion point sits inside entry <code>i</code>, at entry-local position <code>start - offset</code>. Note the invariant the loop guarantees: <code>offset &lt;= start &lt; offset + l</code>.</p>
+            <p>Later, once the helper has decided there is ring space and no copy fallback is needed, the split branch runs (guarded by <code>start - offset != 0</code>, i.e. the insertion point is strictly inside the entry):</p>
+            <pre><code>if (start - offset) {
+	if (i == msg-&gt;sg.end)
+		sk_msg_iter_var_prev(i);
+	psge = sk_msg_elem(msg, i);
+	rsge = sk_msg_elem_cpy(msg, i);
+
+	psge-&gt;length = start - offset;
+	rsge.length -= psge-&gt;length;
+	rsge.offset += start;
+
+	sk_msg_iter_var_next(i);
+	sg_unmark_end(psge);
+	sg_unmark_end(&amp;rsge);
+}</code></pre>
+            <p>Line by line, this is what the code is <em>supposed</em> to do:</p>
+            <ul>
+                <li><code>psge</code> points at the original SG entry, which will become the <strong>left fragment</strong> in place. <code>rsge</code> is a private copy of the same entry, which will become the <strong>right fragment</strong> and get re-inserted into the ring after the new data slot (further down, the code does <code>get_page(sg_page(&amp;rsge))</code> and stores it into <code>msg-&gt;sg.data[new]</code>).</li>
+                <li><code>psge-&gt;length = start - offset;</code> truncates the left fragment so it covers exactly the bytes before the insertion point. <code>start - offset</code> is the entry-local insertion position, so this is correct and is in fact the <em>definition</em> of the left fragment's length.</li>
+                <li><code>rsge.length -= psge-&gt;length;</code> shrinks the right fragment by the same amount, so left length + right length = original length. Correct.</li>
+                <li><code>rsge.offset += start;</code> is supposed to slide the right fragment's start forward so it begins where the left fragment ended. And this is where the two coordinate systems collide.</li>
+            </ul>
+            <p>The crucial detail: an SG entry's <code>offset</code> field is <strong>page-local</strong>. It says where inside the backing page the fragment starts. When the right fragment is carved out of the same page fragment, its new page-local offset must be the original page-local offset plus the number of bytes consumed from the front — that is, <code>offset</code> advanced by the left fragment's length, <code>start - offset</code>. But the code advances it by <code>start</code>, the message-global insertion point.</p>
+
+            <h3>What happens to rsge afterwards</h3>
+            <p>It is worth following <code>rsge</code> a little further, because its later treatment is why a wrong <code>rsge.offset</code> is a silent corruption rather than an immediate, loud failure. After the split, the helper shifts the ring entries one or two slots forward to make room, and then, in the <code>place_new</code> epilogue:</p>
+            <pre><code>place_new:
+	/* Place newly allocated data buffer */
+	sk_mem_charge(msg-&gt;sk, len);
+	msg-&gt;sg.size += len;
+	__clear_bit(new, msg-&gt;sg.copy);
+	sg_set_page(&amp;msg-&gt;sg.data[new], page, len + copy, 0);
+	if (rsge.length) {
+		get_page(sg_page(&amp;rsge));
+		sk_msg_iter_var_next(new);
+		msg-&gt;sg.data[new] = rsge;
+	}
+
+	sk_msg_reset_curr(msg);
+	sk_msg_compute_data_pointers(msg);
+	return 0;</code></pre>
+            <p>Three things to note:</p>
+            <ul>
+                <li>The new data gets its own freshly allocated page and its own SG slot (<code>sg_set_page(..., page, len + copy, 0)</code>) — the inserted bytes never share a page with the split entry, so no offset arithmetic is needed for them.</li>
+                <li><code>rsge</code> is stored verbatim into the slot after the new data, with an extra page reference (<code>get_page</code>) since the same backing page is now referenced by both fragments. Whatever <code>offset</code> the split computed is baked into the ring at this point, unexamined.</li>
+                <li>The message size is bumped by <code>len</code> only — the split itself is length-neutral, because <code>rsge.length</code> was shrunk by exactly what <code>psge-&gt;length</code> kept. This is why the bug survives any size-based sanity check: the accounting is consistent, only the <em>location</em> of the tail fragment is wrong.</li>
+            </ul>
+            <p>Everything downstream — <code>sk_msg_compute_data_pointers()</code>, the verdict and redirect logic, the eventual transmit or receive path — trusts the scatterlist. A right fragment pointing 4096 bytes into the weeds is simply served up as message data.</p>
+
+            <h2>Where it goes wrong</h2>
+            <p>Let me make this concrete with a numeric walkthrough. (This is an illustrative example constructed to show the arithmetic, not a captured trace.)</p>
+            <p>Say the message ring holds two entries:</p>
+            <ul>
+                <li>Entry 0: page P0, page-local offset 0, length 4096.</li>
+                <li>Entry 1: page P1, page-local offset 512, length 3000.</li>
+            </ul>
+            <p>The whole message is 7096 bytes. A sk_msg program calls <code>bpf_msg_push_data(msg, 5000, 64, 0)</code> — insert 64 bytes at message offset 5000, which falls inside entry 1.</p>
+            <p>Trace the find-entry loop:</p>
+            <ul>
+                <li>Iteration 1: <code>offset += l</code> with <code>l</code> still 0 gives <code>offset = 0</code>; <code>l = 4096</code> (entry 0's length). Is <code>5000 &lt; 0 + 4096</code>? No. Advance to entry 1.</li>
+                <li>Iteration 2: <code>offset = 0 + 4096 = 4096</code>; <code>l = 3000</code>. Is <code>5000 &lt; 4096 + 3000 = 7096</code>? Yes. Break.</li>
+            </ul>
+            <p>So <code>offset = 4096</code> (message-global start of entry 1), <code>l = 3000</code>, and the entry-local insertion position is <code>start - offset = 5000 - 4096 = 904</code>. There is ring space, so we take the split branch:</p>
+            <pre><code>psge-&gt;length = start - offset;   /* 5000 - 4096 = 904  */
+rsge.length -= psge-&gt;length;    /* 3000 - 904 = 2096  */
+rsge.offset += start;            /* 512 + 5000 = 5512  ← BUG */</code></pre>
+            <p>Now look at the resulting layout:</p>
+            <ul>
+                <li>Left fragment (in place of entry 1): page P1, offset 512, length 904. This covers bytes [512, 1416) of page P1 — exactly the first 904 bytes of the original entry. Correct.</li>
+                <li>Right fragment <code>rsge</code>: page P1, offset <strong>5512</strong>, length 2096. But the original entry only spanned page bytes [512, 3512). The right fragment was supposed to start at page-local offset 512 + 904 = <strong>1416</strong>. It starts 4096 bytes too far ahead instead.</li>
+            </ul>
+            <p>The over-advance is exactly <code>offset</code> — the message-global position of the entry's beginning: <code>start - (start - offset) = offset = 4096</code>. The lengths still add up (904 + 2096 = 3000), so nothing that checks only lengths catches it. But the right fragment now points 4096 bytes past where it should: the 2096 bytes it claims to describe are not the tail of the original entry at all. The bytes in page range [1416, 3512) — the real tail of the message — are silently dropped from the logical stream, and the fragment may run off the end of the page entirely, so whatever consumer later walks this scatterlist reads the wrong data or wanders out of bounds. Left and right fragments no longer reconstruct the original entry.</p>
+            <p>And here is why the bug survived seven and a half years: for an insertion into the <strong>first</strong> SG entry, the find-entry loop breaks with <code>offset = 0</code>, so <code>start == start - offset</code> and the buggy line computes the correct value by accident. Prepending a header at offset 0 — the use case from the original commit message, and by far the most common one — never triggers it. You need a message that already spans multiple SG entries <em>and</em> an insertion point strictly inside an entry other than the first. That is a much rarer shape, and when it happens the failure is data corruption downstream rather than an obvious crash at the call site.</p>
 
             <h2>The fix</h2>
-            <p>Advance the offset by the fragment-local delta instead — exactly the number of bytes the left fragment absorbed from the front of the original entry:</p>
+            <p>Advance the page-local offset by the fragment-local delta — the number of bytes the left fragment absorbed from the front of the original entry:</p>
             <pre><code>-rsge.offset += start;
 +rsge.offset += start - offset;</code></pre>
-            <p>Since <code>psge-&gt;length = start - offset</code> was computed on the line above, the invariant is easy to verify: left length + right length = original length, and right offset = original offset + left length.</p>
+            <p>The invariant check is immediate, because the line above already defined the left fragment's length as exactly that delta:</p>
+            <ul>
+                <li><code>psge-&gt;length = start - offset</code> (left fragment length),</li>
+                <li><code>rsge.length -= psge-&gt;length</code> (right fragment length), so left + right = original length. ✓</li>
+                <li><code>rsge.offset += start - offset</code>, i.e. right offset = original offset + left length. ✓</li>
+            </ul>
+            <p>With the fix, our walkthrough's right fragment starts at page-local offset 512 + 904 = 1416 with length 2096, covering [1416, 3512) — precisely the tail of the original entry. Left fragment, new data slot, right fragment: the message is reassembled correctly.</p>
+
+            <h2>How it was found / verified</h2>
+            <p>To be honest about the process: this came out of reading the split arithmetic, not from a crash report of my own. The pattern that jumps out once you stare at the three lines is that two of them use the entry-local quantity <code>start - offset</code> while the third uses the message-global <code>start</code> — in a block where every other operand is entry-local or page-local. Mixed coordinate systems in adjacent lines of the same computation is a classic smell, and the numeric walkthrough above is the cheapest way to confirm the suspicion: pick any non-zero <code>offset</code> and the right fragment visibly detaches from the original entry.</p>
+            <p>The second half of verification was git archaeology, to answer "when did this break, and was it ever right?" Two commands do most of the work:</p>
+            <pre><code># Follow the function's whole history, diff by diff:
+git log -L '/BPF_CALL_4(bpf_msg_push_data/,/^}/:net/core/filter.c'
+
+# Inspect the commit that introduced the helper:
+git show 6fff607e2f14 -- net/core/filter.c</code></pre>
+            <p>The <code>git log -L</code> history shows the helper being touched many times over the years — fixes for the end mark, for copy-state bookkeeping, for bounds overestimation, for <code>len == 0</code> — but the three split lines themselves are untouched since birth. And <code>git show 6fff607e2f14</code> confirms it: the 2018 commit that introduced <code>bpf_msg_push_data()</code> already contained <code>rsge.offset += start;</code> verbatim. The bug was not introduced by a later refactor; it was born with the helper and had simply never been exercised hard enough in the non-first-entry case to be pinned down. That also settled the <code>Fixes:</code> tag: it points at <code>6fff607e2f14</code>, which means the fix is a stable-backport candidate for every tree that has the helper.</p>
+            <p>I deliberately did not dress the patch up with fabricated test output — no BPF program, no KASAN splat was attached. The commit message makes the argument the same way this post does: state the two coordinate systems, state which one <code>rsge.offset</code> lives in, and show that the corrected operand matches the length removed from the front of the original entry.</p>
 
             <h2>Upstream</h2>
-            <p>Merged as <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f72eed9b84fb771019a955908132410a9ba9ea3f" target="_blank" rel="noopener">f72eed9b84fb</a> ("bpf: sockmap: fix tail fragment offset in bpf_msg_push_data"), with a <code>Fixes:</code> tag to <code>6fff607e2f14</code>, the commit that introduced the helper, and a stable backport.</p>
-            <p>Takeaway: whenever two coordinate systems meet — message-global versus page-local here — write down which variable lives in which. The bug was one missing subtraction; the audit to find it was the real work.</p>
+            <p>I posted the patch on 2026-05-24. Jakub Kicinski applied it, and it landed in mainline on 2026-05-29 as commit <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f72eed9b84fb771019a955908132410a9ba9ea3f" target="_blank" rel="noopener">f72eed9b84fb</a> ("bpf: sockmap: fix tail fragment offset in bpf_msg_push_data"). The commit carries:</p>
+            <ul>
+                <li><code>Fixes: 6fff607e2f14 ("bpf: sk_msg program helper bpf_msg_push_data")</code></li>
+                <li><code>Cc: stable@kernel.org</code>, so the fix propagates to stable trees — appropriate for a data-corruption bug that has been shipping since 2018.</li>
+                <li><code>Reported-by: Yuan Tan</code>, <code>Reported-by: Zhengchuan Liang</code>, and <code>Reported-by: Xin Liu</code> — credit where it's due to the people whose reports put this bug on the table.</li>
+            </ul>
+
+            <h2>Takeaway</h2>
+            <p>The fix was one operand. The actual work was the audit: writing down which coordinate system each variable lives in, and noticing that one line out of three disagreed with its neighbors. Message-global versus page-local, absolute versus relative — wherever two coordinate systems meet in the same expression is where this class of bug lives. When you find such a junction in code you're reading, it is worth the ten minutes to run one concrete numeric example through it.</p>
         </div>
     </div>
 

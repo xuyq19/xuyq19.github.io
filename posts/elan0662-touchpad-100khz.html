@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>When your touchpad lies to the kernel: fixing an ELAN0662 at 400 kHz — Yuqi Xu</title>
+    <link rel="stylesheet" href="../css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-container">
+            <a href="../index.html" class="nav-logo">xuyq</a>
+            <div class="nav-links">
+                <a href="../index.html">Home</a>
+                <a href="../resume.html">Résumé</a>
+                <a href="index.html">Blog</a>
+                <a href="https://github.com/xuyq19" target="_blank" rel="noopener">GitHub</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="article-page">
+        <header class="article-header">
+            <h1>When your touchpad lies to the kernel: fixing an ELAN0662 at 400 kHz</h1>
+            <p class="article-meta">First posted 2026-09-18 · Acked, pending in linux-i2c · i2c, ACPI, DSDT override, touchpad</p>
+        </header>
+        <div class="article-content">
+
+            <p>My laptop is a Lenovo ThinkBook 14 G4+ ARA (21D0), an AMD machine running Fedora. For months the touchpad had an intermittent stutter: most of the time it was fine, then for a second the cursor would freeze, drift, or a touch would simply be dropped. It was bad enough to be annoying and rare enough that I kept putting off investigating it. This post is the full story of how I root-caused it to the I2C bus running at 400 kHz, proved the fix with an ACPI DSDT override, and sent a one-line patch upstream.</p>
+
+            <h2>The symptom</h2>
+
+            <p>The first concrete clue was in the journal. Grepping the current boot for libinput messages turned up a repeating error:</p>
+
+            <pre><code>$ journalctl -b --no-pager | grep -i 'libinput' | tail -40
+...
+libinput error: event6 - ELAN0662:00 04F3:317C Touchpad: kernel bug: Touch jump detected and discarded.</code></pre>
+
+            <p>"Touch jump" means the touchpad reported a physically impossible coordinate transition between two consecutive frames — as if the finger had teleported several centimeters in a few milliseconds. libinput knows this cannot be real motion, so it discards the frame. The discarded frame is exactly the moment I perceived as "the cursor froze for a beat" or "that tap didn't register".</p>
+
+            <p>One nasty detail: this message is rate limited by libinput to at most five messages per 24 hours. So the handful of log lines I could see were the tip of the iceberg; the actual number of discarded frames was much higher. That also matches the subjective symptom — "sometimes fine, sometimes terrible" — because whether you notice depends on finger speed, palm contact, bus load, and probably power noise.</p>
+
+            <h2>Ruling things out</h2>
+
+            <p>Before blaming hardware, I went through the boring checklist. The device itself enumerated fine and sat on the AMD I2C controller:</p>
+
+            <pre><code>$ libinput list-devices 2&gt;/dev/null | grep -A 25 -i touchpad
+$ cat /proc/bus/input/devices | grep -i -B2 -A8 touchpad
+...
+N: Name="ELAN0662:00 04F3:317C Touchpad"
+...</code></pre>
+
+            <p>GNOME touchpad settings were all sane values (tap-to-click, natural scrolling, speed) — nothing that explains dropped frames:</p>
+
+            <pre><code>$ gsettings list-recursively org.gnome.desktop.peripherals.touchpad</code></pre>
+
+            <p>No device disconnects or re-enumerations in the log (which would have pointed at a loose cable or contact issue), and no I2C transfer errors or timeouts at all:</p>
+
+            <pre><code>$ journalctl -b --no-pager | grep -E 'input: |removed|Reconnected|disconnect' | grep -i -E 'elan|touchpad|input:' | tail -30
+(blank)
+$ journalctl -b -k --no-pager | grep -i -E 'error|timeout|fail' | grep -i -E 'i2c|elan|hid' | tail -20
+(blank = none)</code></pre>
+
+            <p>No applicable libinput quirks for this VID/PID either:</p>
+
+            <pre><code>$ grep -ri '04f3' /usr/share/libinput/*.quirks | grep -i -E '317c|elan0662'
+(no specific quirk found if blank)
+$ libinput quirks list /dev/input/event6
+...</code></pre>
+
+            <p>BIOS was already the newest LVFS offered for this machine, and Secure Boot / kernel lockdown were off (this matters later, because a DSDT override needs them off):</p>
+
+            <pre><code>$ fwupdmgr get-updates
+(no BIOS update available)
+$ mokutil --sb-state
+SecureBoot disabled
+$ cat /sys/kernel/security/lockdown
+[none]</code></pre>
+
+            <p>So: driver bound correctly, hardware never dropped off the bus, no I2C errors, settings normal, firmware current. The touchpad was simply feeding the kernel garbage coordinates, intermittently.</p>
+
+            <h2>The prime suspect: 400 kHz</h2>
+
+            <p>Searching for the exact symptom ("ELAN0662", "Touch jump detected") turned up reports from other Lenovo AMD laptops with the same touchpad generation, and — more importantly — the fact that the kernel already carries a workaround for this exact class of problem. In <code>drivers/i2c/i2c-core-acpi.c</code> there is a hand-maintained list of devices whose I2C bus speed gets clamped to 100 kHz:</p>
+
+            <pre><code>$ curl -s 'https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/plain/drivers/i2c/i2c-core-acpi.c' \
+    | sed -n '/force_100khz_device_ids\[\]/,/^};/p' | grep -E '^\s*\{'
+	{ "DELL0A86", 0 },
+	{ "DLL0945", 0 },
+	{ "ELAN0678", 0 },
+	{ "ELAN06FA", 0 },
+	{ "ELAN1300", 0 },</code></pre>
+
+            <p>I checked both mainline and the linux-7.2.y stable branch the same way. Neither contains <code>ELAN0662</code>. My two installed kernels (6.19.10 and 7.2.5) therefore run this touchpad at whatever speed the firmware asks for.</p>
+
+            <p>The comment above that list is worth quoting, because it frames everything that follows: the root cause of the issue is <em>not known</em>. The working theory involves Designware controller timing defaults and ELAN firmware having insufficient margin at 400 kHz, but nobody has proven it. That is why the workaround is a per-model allowlist instead of a real fix: dropping from 400 kHz to 100 kHz is a 4x latency penalty for devices that are fine, so a blanket rule for all of vendor 04F3 was proposed in May 2026 and rejected as too broad. Each model gets in only when an owner shows up with evidence: DSDT declares 400 kHz, libinput logs touch jumps, and forcing 100 kHz makes them stop.</p>
+
+            <p>So the question became concrete: does <em>my</em> DSDT actually declare 400 kHz for this touchpad?</p>
+
+            <h2>Proving it from the DSDT</h2>
+
+            <p>I installed <code>acpica-tools</code> and dumped the machine's ACPI tables, then disassembled the DSDT with the SSDTs as external references:</p>
+
+            <pre><code># acpidump -b
+$ mkdir -p /tmp/opencode/dsdt &amp;&amp; cp /tmp/opencode/acpi/dsdt.dat /tmp/opencode/acpi/ssdt*.dat /tmp/opencode/dsdt/
+$ cd /tmp/opencode/dsdt &amp;&amp; iasl -e ssdt*.dat -d dsdt.dat</code></pre>
+
+            <p>First, the mapping between the live device and the ACPI namespace. The running kernel device <code>i2c-ELAN0662:00</code> corresponds to ACPI node <code>\_SB.I2CA.TPD0</code>, and the <code>I2CA</code> controller is the <code>AMDI0010</code> device:</p>
+
+            <pre><code>$ cat /sys/bus/acpi/devices/ELAN0662:00/path
+\_SB_.I2CA.TPD0
+$ readlink -f /sys/bus/i2c/devices/i2c-ELAN0662:00/firmware_node
+...
+$ grep -n -B8 'Name (_HID, "AMDI0010")' dsdt.dsl | grep -E 'Device|_HID|_ADR|_UID'
+...</code></pre>
+
+            <p>Inside <code>TPD0._CRS</code> there is an <code>I2cSerialBus</code> resource descriptor. Decoding the raw bytes from the disassembly against the ACPI spec (I pulled <code>struct aml_resource_i2c_serialbus</code> from the ACPICA headers to get the field layout right):</p>
+
+            <pre><code>8e 19 00 | 01 00 01 02 00 | 00 01 06 00 | 80 1a 06 00 | 15 00 | 5c5f53422e49324341 00
+             I2C descriptor     ...          ^ speed       ^ addr 0x15  ^ "\_SB.I2CA"
+ConnectionSpeed = 0x00061A80 = 400000 Hz (400 kHz)</code></pre>
+
+            <p>There it is, in the firmware's own words: the touchpad is told to run at 400 kHz — the exact condition under which ELAN06FA, ELAN0678, and ELAN1300 misbehaved.</p>
+
+            <p>To make sure I had decoded the descriptor correctly rather than pattern-matched myself into a conclusion, I cross-checked by writing an equivalent ASL snippet and compiling it with iasl, then comparing bytes against the real DSDT. The first attempt came out one byte short — I had written <code>I2cSerialBusV2</code> while the DSDT uses the original <code>I2cSerialBus</code> form:</p>
+
+            <pre><code>I2cSerialBus (0x0015, ControllerInitiated, 0x00061A80,
+    AddressingMode7Bit, "\\_SB.I2CA", 0x00, ResourceConsumer)</code></pre>
+
+            <p>With the V1 form, iasl's output matched the DSDT descriptor byte for byte. At that point the evidence chain was complete:</p>
+
+            <pre><code>live device i2c-ELAN0662:00  -&gt;  ACPI \_SB.I2CA.TPD0  -&gt;  controller I2CA (AMDI0010)</code></pre>
+
+            <p>Device binding, ACPI node, and controller all agree; the firmware declares 400 kHz; neither installed kernel clamps it. The only thing left was the A/B proof: force 100 kHz and watch the touch jumps disappear.</p>
+
+            <h2>The DSDT override</h2>
+
+            <p>Rather than recompiling the whole table from modified ASL (which risks introducing unrelated diffs), I patched the binary directly: locate the descriptor bytes, change the 4-byte speed field from <code>0x00061A80</code> (400000) to <code>0x000186A0</code> (100000), and fix the table checksum. In practice that is 3 bytes — the fourth byte of the field was already <code>0x00</code> — plus the checksum byte. A Python script asserted the descriptor occurs exactly once in the table before touching anything:</p>
+
+            <pre><code>desc = bytes.fromhex('8e1900' '0100010200' '00010600' '801a0600' '1500' '5c5f53422e49324341' '00')
+n = orig.count(desc)
+assert n == 1, "descriptor not unique, stop"</code></pre>
+
+            <p>Then I verified the patched table by disassembling it again and diffing against the original disassembly: the only change was the ELAN0662 descriptor's speed bytes, now <code>A0 86 01 00</code>. Everything else identical.</p>
+
+            <p>For deployment, Fedora's dracut has native ACPI override support: anything in <code>acpi_table_dir</code> gets packed into the uncompressed early cpio at the very front of the initramfs, which the kernel reads early in boot. Both installed kernels have <code>CONFIG_ACPI_TABLE_UPGRADE=y</code>. So:</p>
+
+            <pre><code># mkdir -p /etc/acpi-override
+# cp DSDT-patched.aml /etc/acpi-override/DSDT.aml &amp;&amp; chmod 644 /etc/acpi-override/DSDT.aml
+# cat /etc/dracut.conf.d/99-acpi-override.conf
+acpi_override="yes"
+acpi_table_dir="/etc/acpi-override"
+# dracut -f --regenerate-all</code></pre>
+
+            <p>And verified the table actually made it into both initramfs images, by hash:</p>
+
+            <pre><code># lsinitrd /boot/initramfs-6.19.10-300.fc44.x86_64.img | grep -i -E 'acpi|DSDT'
+# lsinitrd -f /kernel/firmware/acpi/DSDT.aml /boot/initramfs-6.19.10-300.fc44.x86_64.img | md5sum
+# md5sum /etc/acpi-override/DSDT.aml
+(identical)</code></pre>
+
+            <p>The rescue entry was left untouched as a fallback, and full rollback is two steps: delete <code>/etc/acpi-override</code> and the dracut conf snippet, then regenerate the initramfs again. Time to reboot.</p>
+
+            <h2>The first reboot that did nothing</h2>
+
+            <p>After rebooting, the kernel log looked encouraging:</p>
+
+            <pre><code>ACPI: DSDT ACPI table found in initrd [kernel/firmware/acpi/DSDT.aml][0xf126]</code></pre>
+
+            <p>But when I compared the table the kernel had actually loaded (<code>/sys/firmware/acpi/tables/DSDT</code>) against my patched file, the hashes did not match. The loaded table was byte-identical to the factory original — checksum <code>0x5F</code>, speed field still 400 kHz. The kernel had <em>found</em> my table in the initrd and then silently not applied it.</p>
+
+            <p>The answer is in <code>drivers/acpi/tables.c</code>. The table-upgrade path refuses to install an override unless the new table's OEM revision is strictly higher than the existing one:</p>
+
+            <pre><code>if (test_and_set_bit(...) ||
+    existing_table-&gt;oem_revision &gt;= table-&gt;oem_revision) {
+	goto next_table;   /* skip: new table's OEM revision must be higher */
+}</code></pre>
+
+            <p>My patched table had only changed the speed bytes; the OEM Revision field was still 1, same as the factory table. From the kernel's point of view there was "no newer revision", so it skipped the override. That is why the log said <code>found in initrd</code> but there was no <code>override</code> line.</p>
+
+            <p>The fix was to bump the OEM Revision from 1 to 2 and recompute the checksum again. The final patched table differs from the factory DSDT in exactly 5 bytes:</p>
+
+            <pre><code>0x9       checksum
+0x18      OEM Revision 1 -&gt; 2
+0xE391~93 speed 400 kHz -&gt; 100 kHz</code></pre>
+
+            <p>Redeploy (<code>cp</code> to <code>/etc/acpi-override/DSDT.aml</code>, <code>dracut -f --regenerate-all</code>, re-verify the md5 inside both initramfs images), reboot once more, and this time:</p>
+
+            <pre><code>ACPI: Table Upgrade: override [DSDT-LENOVO-CB-01   ]
+ACPI: DSDT ... 00F126 (v01 LENOVO CB-01 00000002 ...)   &lt;- our v2 table</code></pre>
+
+            <p>The effective DSDT in sysfs now hashed identical to my patched file, and the speed field read <code>0x000186A0</code> = 100 kHz.</p>
+
+            <h2>A/B result</h2>
+
+            <p>The numbers that went into the commit message:</p>
+
+            <ul>
+                <li><strong>Before:</strong> libinput discarded three touch jumps within about a minute of touchpad use (and remember, the log is rate limited to five per 24 hours, so the real rate was worse).</li>
+                <li><strong>After:</strong> zero touch jumps logged during more than an hour of normal use — deliberately including the operations that used to trigger it (fast moves, two-finger scroll, typing then touching the pad).</li>
+            </ul>
+
+            <p>Subjectively, the stutter and the randomly dropped touches were gone. The override persists automatically across kernel upgrades because dracut repacks it every time it rebuilds the initramfs.</p>
+
+            <h2>The upstream patch</h2>
+
+            <p>The proper fix is one line in the quirk table. First, due diligence: lore and Patchwork (all states, including archived) had no existing or queued ELAN0662 patch. One correction I got right only after being challenged: my first draft was based on my local net-next tree, which is the wrong subsystem tree for an I2C patch. The right baseline is the I2C maintainer's tree, so I fetched Andi Shyti's <code>i2c/i2c-next</code> and rebased onto it — which turned out to be even newer than net-next here, as its context already contained the <code>DELL0A86</code> entry.</p>
+
+            <p>The full diff, inserted in the table's alphabetical order:</p>
+
+            <pre><code>diff --git a/drivers/i2c/i2c-core-acpi.c b/drivers/i2c/i2c-core-acpi.c
+--- a/drivers/i2c/i2c-core-acpi.c
++++ b/drivers/i2c/i2c-core-acpi.c
+@@ -373,6 +373,7 @@ static const struct acpi_device_id i2c_acpi_force_100khz_device_ids[] = {
+ 	 */
+ 	{ "DELL0A86", 0 },
+ 	{ "DLL0945", 0 },
++	{ "ELAN0662", 0 },
+ 	{ "ELAN0678", 0 },
+ 	{ "ELAN06FA", 0 },
+ 	{ "ELAN1300", 0 },</code></pre>
+
+            <p>The commit message carries the evidence: the exact libinput log line with its rate limiting, the DSDT connection speed <code>0x00061A80</code>, the <code>Table Upgrade: override [DSDT-LENOVO-CB-01]</code> confirmation, and the A/B numbers. It also states honestly that the patch itself was not build tested — the behaviour was validated through the DSDT override, which exercises the same code path with the same outcome. <code>checkpatch.pl</code>: 0 errors, 0 warnings. Recipients came from <code>get_maintainer.pl</code> (after installing the missing <code>perl-open</code> package to make it run), cross-checked against the original ELAN1300 thread's headers:</p>
+
+            <pre><code>To:  Mika Westerberg &lt;westeri@kernel.org&gt;       (I2C ACPI SUPPORT)
+To:  Andi Shyti &lt;andi.shyti@kernel.org&gt;          (I2C SUBSYSTEM)
+Cc:  linux-i2c@vger.kernel.org
+Cc:  linux-acpi@vger.kernel.org
+Cc:  linux-kernel@vger.kernel.org</code></pre>
+
+            <p>Two mistakes of mine got caught in review of that list: Mika belongs in To (his <code>I2C ACPI SUPPORT</code> entry covers exactly this file), not Cc, and his current address is <code>westeri@kernel.org</code>, not the old Intel one.</p>
+
+            <p>Sending was its own small saga. <code>git send-email</code> does not read <code>~/.netrc</code> — it goes through <code>git credential</code>. My first attempt at migrating the Gmail app password silently wrote nothing (the credential store file was 0 bytes), and my verification command counted an empty <code>password=</code> line as success. A <code>--dry-run</code> then reported "OK", but dry-run never authenticates against the SMTP server, so the broken credential only surfaced on the real send:</p>
+
+            <pre><code>5.7.8 Username and Password not accepted. For more information, go to
+5.7.8  https://support.google.com/mail/?p=BadCredentials ... - gsmtp</code></pre>
+
+            <p>On top of that, the password stored in <code>~/.netrc</code> was itself wrong — 18 characters where a Google app password is exactly 16. After fixing the password, storing it properly via <code>git credential-store</code> scoped to <code>smtp://smtp.gmail.com:587</code>, and verifying with a real self-send (<code>Result: 250</code>, with <code>GIT_TERMINAL_PROMPT=0</code> so a bad credential would fail loudly instead of prompting), the patch went out on 2026-09-18.</p>
+
+            <p>Mika Westerberg Acked it. As of this writing it has not been picked up into <code>i2c/i2c-next</code> yet — that is Andi's call, and he batches. Once it lands there it rides the next merge window into mainline, and stable AUTOSEL should pick it up from there; after that I can finally delete the DSDT override.</p>
+
+            <h2>Takeaway</h2>
+
+            <p>The whole fix is one line of C, but getting there meant reading a firmware table byte by byte and learning that an ACPI table override is silently ignored unless you bump the OEM revision. If your ELAN touchpad stutters on an AMD laptop and libinput complains about touch jumps, check <code>i2c_acpi_force_100khz_device_ids</code> — if your model is missing, the community's answer is: you are the person who adds it, and a DSDT override is how you prove it works first.</p>
+
+        </div>
+    </div>
+
+    <footer class="footer">
+        <div class="footer-container">
+            <p>© 2026 Yuqi Xu</p>
+            <div class="footer-links">
+                <a href="index.html">All posts</a>
+                <a href="https://github.com/xuyq19" target="_blank" rel="noopener">GitHub</a>
+            </div>
+        </div>
+    </footer>
+</body>
+</html>

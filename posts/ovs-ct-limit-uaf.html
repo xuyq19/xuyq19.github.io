@@ -29,34 +29,287 @@
         </header>
 
         <div class="article-content">
-            <p>Open vSwitch lets you cap the number of conntrack entries per zone — the "CT limit" feature. The per-zone accounting state lives in kernel memory attached to the network namespace. This post is about a use-after-free in the way that state was torn down, and why the correct fix turned out to be a restructuring of the teardown rather than another NULL check.</p>
+            <p>Open vSwitch (OVS) lets you cap the number of conntrack entries per zone — the "CT limit" feature, useful when several VMs or containers share one network namespace and you don't want a single noisy tenant to exhaust the conntrack table. The per-zone accounting state lives in kernel memory attached to the network namespace: a struct <code>ovs_ct_limit_info</code> hanging off the per-netns <code>struct ovs_net</code>.</p>
+            <p>This post walks through a slab-use-after-free I fixed in the way that state was torn down. The fix itself is only about a hundred lines, but almost none of them are where a reader would first look: the correct repair turned out to be a restructuring of the namespace teardown sequence, not another NULL check in the reader. The post goes through the bug, the vulnerable code line by line, the fix hunk by hunk, and the git archaeology that got me there.</p>
 
             <h2>The bug</h2>
-            <p>Two sides touch the CT limit state with different locking:</p>
+            <p>The commit message states it compactly:</p>
+            <pre><code>Packet processing uses CT limit state under RCU, while netns teardown
+frees that state under ovs_mutex. The CT limit pointer was neither removed
+from readers nor protected by a grace period, allowing packet processing to
+dereference the freed state.
+
+An unprivileged user can trigger this bug from a user and network
+namespace, causing a slab-use-after-free in ovs_ct_execute() when the
+netns is torn down.</code></pre>
+            <p>Unpacking that, there are two sides touching the CT limit state with completely different locking:</p>
             <ul>
-                <li>The <strong>datapath</strong> reads it on every packet that goes through a conntrack action — under RCU, in <code>ovs_ct_execute()</code>, no mutex allowed on this fast path.</li>
-                <li><strong>Netns teardown</strong> freed that same state while holding <code>ovs_mutex</code>, in the pernet exit callback.</li>
+                <li>The <strong>datapath</strong> side. Every packet that hits a conntrack (<code>ct</code>) action in an OVS flow goes through <code>ovs_ct_execute()</code> in <code>net/openvswitch/conntrack.c</code>. For unconfirmed connections it calls <code>ovs_ct_check_limit()</code>, which reads <code>ovs_net-&gt;ct_limit_info</code> and walks the per-zone limit state. This is the packet fast path: it runs under <code>rcu_read_lock()</code> (taken in <code>ovs_dp_process_packet()</code> in <code>datapath.c</code>), and it may not sleep or take a mutex.</li>
+                <li>The <strong>teardown</strong> side. When a network namespace dies, the pernet core runs the OVS exit callback <code>ovs_exit_net()</code>, which under <code>ovs_mutex</code> (via <code>ovs_lock()</code>) called <code>ovs_ct_exit()</code> → <code>ovs_ct_limit_exit()</code>, which freed the very same <code>ovs_ct_limit_info</code> structure.</li>
             </ul>
-            <p>The CT limit pointer was never removed from readers before being freed, and there was no RCU grace period between the free and the readers. So a packet hitting the datapath at the wrong moment during namespace teardown would dereference freed memory:</p>
-            <pre><code>slab-use-after-free in ovs_ct_execute()</code></pre>
-            <p>What makes this bug serious is who can reach it: an unprivileged user inside a user namespace can create their own network namespace, configure CT limits, and tear the namespace down. No capabilities on the host required.</p>
+            <p>The critical detail: the teardown freed the structure without ever clearing <code>ovs_net-&gt;ct_limit_info</code> and without waiting for RCU readers. A mutex and a read-side RCU critical section provide zero mutual exclusion against each other. So if a packet was being processed on another CPU while the namespace was being torn down, the datapath could load a pointer to memory that the teardown had already handed back to the slab allocator — a slab-use-after-free in <code>ovs_ct_execute()</code>.</p>
+            <p>What makes this more than a theoretical race is who can reach it. Creating a user namespace requires no privileges on the host, and the creator of a user namespace gets full capabilities inside it — including <code>CAP_NET_ADMIN</code> over any network namespaces created within. So an unprivileged user can: create a user+network namespace pair, bring up OVS inside it, install flows with conntrack actions, set zone limits, push traffic, and tear the namespace down. The whole trigger is reachable from an unprivileged shell on a default kernel with user namespaces enabled.</p>
+
+            <h2>Reading the vulnerable code</h2>
+            <p>All snippets below are the pre-fix code, taken from the parent of the fix commit (<code>git show 403f96c32c9e~1:net/openvswitch/conntrack.c</code>). First, the reader on the fast path:</p>
+            <pre><code>static int ovs_ct_check_limit(struct net *net,
+			      const struct sk_buff *skb,
+			      const struct ovs_conntrack_info *info)
+{
+	struct ovs_net *ovs_net = net_generic(net, ovs_net_id);
+	const struct ovs_ct_limit_info *ct_limit_info = ovs_net-&gt;ct_limit_info;
+	u32 per_zone_limit, connections;
+	u32 conncount_key;
+
+	conncount_key = info-&gt;zone.id;
+
+	per_zone_limit = ct_limit_get(ct_limit_info, info-&gt;zone.id);
+	if (per_zone_limit == OVS_CT_LIMIT_UNLIMITED)
+		return 0;
+
+	connections = nf_conncount_count_skb(net, skb, info-&gt;family,
+					     ct_limit_info-&gt;data,
+					     &amp;conncount_key);
+	if (connections &gt; per_zone_limit)
+		return -ENOMEM;
+
+	return 0;
+}</code></pre>
+            <p>Note the plain, un-annotated load of <code>ovs_net-&gt;ct_limit_info</code> — no <code>rcu_dereference()</code>, because the field wasn't an RCU pointer at all. The function then dereferences it twice: once to look up the per-zone limit in the hash table, once to pass <code>ct_limit_info-&gt;data</code> (the <code>nf_conncount</code> accounting tree) to <code>nf_conncount_count_skb()</code>. Both dereferences assume the structure is alive.</p>
+            <p>Now the teardown, as it existed before the fix:</p>
+            <pre><code>static void ovs_ct_limit_exit(struct net *net, struct ovs_net *ovs_net)
+{
+	const struct ovs_ct_limit_info *info = ovs_net-&gt;ct_limit_info;
+	int i;
+
+	nf_conncount_destroy(net, info-&gt;data);
+	for (i = 0; i &lt; CT_LIMIT_HASH_BUCKETS; ++i) {
+		struct hlist_head *head = &amp;info-&gt;limits[i];
+		struct ovs_ct_limit *ct_limit;
+		struct hlist_node *next;
+
+		hlist_for_each_entry_safe(ct_limit, next, head, hlist_node)
+			kfree_rcu(ct_limit, rcu);
+	}
+	kfree(info-&gt;limits);
+	kfree(info);
+}</code></pre>
+            <p>This was called from <code>ovs_ct_exit()</code>, which the pernet operations table wired directly into <code>.exit</code>:</p>
+            <pre><code>static void __net_exit ovs_exit_net(struct net *dnet)
+{
+	...
+	ovs_lock();
+
+	ovs_ct_exit(dnet);
+	...
+}</code></pre>
+            <p>Read it slowly and the half-finished RCU discipline jumps out:</p>
+            <ul>
+                <li>The individual <code>struct ovs_ct_limit</code> zone entries were freed with <code>kfree_rcu()</code> — someone knew these hash nodes are walked by RCU readers, and did the right thing for them.</li>
+                <li>But the container structure — <code>info-&gt;data</code> (destroyed via <code>nf_conncount_destroy()</code>), the <code>info-&gt;limits</code> bucket array, and <code>info</code> itself — were all released synchronously, in the middle of the exit callback.</li>
+                <li>And the pointer <code>ovs_net-&gt;ct_limit_info</code> was never cleared. After this function returned, the per-netns struct still pointed at freed memory.</li>
+            </ul>
+            <p>So the reader above could find itself in three bad states: following a live pointer to a structure whose <code>data</code> member was already destroyed, walking a <code>limits</code> array that was already freed, or reading a container struct that was already reallocated as somebody else's slab object. No synchronization primitive anywhere closes this window, because <code>ovs_mutex</code> and <code>rcu_read_lock()</code> don't exclude each other, and no grace period was inserted between "stop using" and "free". The missing invariant: <strong>a pointer read under RCU must be unpublished, and an RCU grace period must elapse, before its memory is released.</strong></p>
 
             <h2>Why the obvious fixes are wrong</h2>
-            <p>The tempting one-liner — "just check for NULL in the reader" — doesn't work here. The reader never saw a NULL pointer; it saw a <em>stale</em> pointer to already-freed memory. Adding NULL checks after the free has already happened fixes nothing. The real invariant that was missing: <strong>a pointer that is read under RCU must be unpublished and grace-period-protected before its memory is released.</strong></p>
+            <p>Two tempting patches don't work.</p>
+            <p><strong>"Just NULL-check the reader."</strong> The reader never observes a NULL pointer in the buggy scenario — it observes a <em>stale</em> pointer, loaded before the free, pointing at memory the allocator may already have recycled. A NULL check only helps if the teardown first stores NULL and then waits for all in-flight readers to finish their loads before freeing; and once you've built that machinery you've reinvented RCU publication plus a grace period. A bare <code>if (!p) return;</code> on its own fixes nothing.</p>
+            <p><strong>"Just take ovs_mutex in the reader."</strong> The reader is the datapath. Packets are processed under <code>rcu_read_lock()</code> in softirq context, potentially at line rate, on every CPU. Taking a sleeping mutex there is a non-starter — it would be illegal (you cannot sleep in an RCU read-side critical section with preemptible RCU semantics the code relies on) and it would serialize all packet forwarding on one global lock. The asymmetry is fundamental: the fast path must stay RCU, so the fix has to live entirely on the teardown side.</p>
+            <p>The right shape of the fix is therefore: publish the pointer through RCU so loads are well-defined; on teardown, <em>detach</em> first (store NULL, under the mutex, so no new reader can pick the state up); then wait for a grace period; then free. The pleasant surprise — and the reason the final patch adds no <code>synchronize_rcu()</code> call of its own — is that the pernet core already provides exactly the detach-then-free sequencing with a grace period in between. More on that below.</p>
 
-            <h2>The fix</h2>
-            <p>The patch restructures the lifetime of the CT limit state around that invariant:</p>
-            <ul>
-                <li>Publish the CT limit pointer through RCU, so all readers and writers agree on how it appears.</li>
-                <li>On teardown, <strong>remove</strong> the state from the visible lists first (in the pernet <code>.pre_exit</code> callback, still under <code>ovs_mutex</code>), then wait for readers.</li>
-                <li>Defer the actual free to the pernet <code>.exit</code> callback. The pernet core already guarantees an RCU grace period between <code>.pre_exit</code> and <code>.exit</code>, so the free happens after every in-flight reader is done — no extra synchronization needed.</li>
-                <li>Keep <code>ovs_mutex</code> around individual CT limit updates, and take the RCU read-side lock where the netlink GET handler walks the limit lists.</li>
-            </ul>
-            <p>One subtlety that came up during review: the netlink command handlers (SET/DEL/GET) do <em>not</em> need new NULL checks, even though the state can now disappear. A userspace netlink socket holds an active reference to its network namespace while a request is being processed, so the pernet exit path cannot run concurrently with netlink operations for that namespace.</p>
+            <h2>The fix, hunk by hunk</h2>
+            <p>The merged commit is <code>403f96c32c9e</code>, touching four files for +98/−46. Walking through every hunk.</p>
+
+            <h3>datapath.h — make the pointer honestly RCU</h3>
+            <pre><code>- * @ct_limit_info: A hash table of conntrack zone connection limits.
++ * @ct_limit_info: Hash table of conntrack zone connection limits. Protected
++ * by RCU; updates and teardown are serialized by ovs_mutex. May be NULL during
++ * netns teardown.
++ * @ct_limit_exit_data: CT limit state detached at .pre_exit, freed at .exit.
+...
+-	struct ovs_ct_limit_info *ct_limit_info;
++	struct ovs_ct_limit_info __rcu *ct_limit_info;
++	struct ovs_ct_limit_info *ct_limit_exit_data;</code></pre>
+            <p>Two things change. The field gains the <code>__rcu</code> annotation so sparse and human readers both know the protocol. And a new <code>ct_limit_exit_data</code> field acts as a holding pen: it carries the detached state from the <code>.pre_exit</code> callback (where detaching happens) to the <code>.exit</code> callback (where freeing happens), because those are two separate functions with no shared local variable.</p>
+
+            <h3>The datapath reader — proper rcu_dereference, and tolerate a dying netns</h3>
+            <pre><code> 	struct ovs_net *ovs_net = net_generic(net, ovs_net_id);
+-	const struct ovs_ct_limit_info *ct_limit_info = ovs_net-&gt;ct_limit_info;
++	const struct ovs_ct_limit_info *ct_limit_info;
+ 	u32 per_zone_limit, connections;
+ 	u32 conncount_key;
+ 
++	ct_limit_info = rcu_dereference(ovs_net-&gt;ct_limit_info);
++	if (!ct_limit_info)
++		return 0;
++
+ 	conncount_key = info-&gt;zone.id;</code></pre>
+            <p>After the fix, the load is a real <code>rcu_dereference()</code>. The NULL check is meaningful now (unlike the naive "fix" dismissed above) because teardown <em>stores NULL before freeing</em>: a reader that loads NULL simply skips limit enforcement and lets the packet through. That's the correct policy — the namespace is already dying; enforcing per-zone limits on its last packets buys nothing. A reader that loaded a non-NULL pointer just before the store is protected by the grace period that follows.</p>
+
+            <h3>ovs_ct_limit_init() — publish only fully-built state</h3>
+            <pre><code>-	ovs_net-&gt;ct_limit_info = kmalloc_obj(*ovs_net-&gt;ct_limit_info);
+-	if (!ovs_net-&gt;ct_limit_info)
++	info = kmalloc_obj(*info);
++	if (!info)
+ 		return -ENOMEM;
+ 	...
++	rcu_assign_pointer(ovs_net-&gt;ct_limit_info, info);
+ 	return 0;</code></pre>
+            <p>Before, the code allocated directly into the global pointer and then filled in the fields, so a concurrent reader could (in principle) observe a half-initialized structure. The rewrite builds everything in a local <code>info</code> — limits array, hash buckets, conncount tree — and only then publishes it with a single <code>rcu_assign_pointer()</code>. Readers now see either NULL or a complete object, never anything in between.</p>
+
+            <h3>The teardown split — exit_start / exit_finish</h3>
+            <p>This is the heart of the fix. The old monolithic <code>ovs_ct_limit_exit()</code> becomes two functions:</p>
+            <pre><code>+static void *ovs_ct_limit_exit_start(struct ovs_net *ovs_net)
++{
++	return rcu_replace_pointer(ovs_net-&gt;ct_limit_info, NULL,
++				   lockdep_ovsl_is_held());
++}
++
++/* The CT limit state must be detached by ovs_ct_limit_exit_start() and an
++ * RCU grace period must elapse before this function runs.  The pernet core
++ * guarantees the grace period between the .pre_exit and .exit callbacks.
++ */
++static void ovs_ct_limit_exit_finish(struct net *net, void *data)
++{
++	const struct ovs_ct_limit_info *info = data;
+ 	int i;
+ 
++	if (!info)
++		return;
++
+ 	nf_conncount_destroy(net, info-&gt;data);
+ 	for (i = 0; i &lt; CT_LIMIT_HASH_BUCKETS; ++i) {
+ 		...
+ 		hlist_for_each_entry_safe(ct_limit, next, head, hlist_node)
+-			kfree_rcu(ct_limit, rcu);
++			kfree(ct_limit);
+ 	}
+ 	kfree(info-&gt;limits);
+ 	kfree(info);
+ }</code></pre>
+            <p><code>ovs_ct_limit_exit_start()</code> does exactly one thing: atomically swap the published pointer to NULL (with the lockdep assertion that <code>ovs_mutex</code> is held, since updates are serialized by it) and hand the old pointer back. From this instant, no new RCU reader can find the state.</p>
+            <p><code>ovs_ct_limit_exit_finish()</code> runs later and does the actual freeing. Note that the per-entry <code>kfree_rcu()</code> calls were downgraded to plain <code>kfree()</code>: by the time this function runs, a grace period has already elapsed, so deferring again would be pure overhead. Who guarantees that grace period? The pernet core — the next hunk wires that up.</p>
+
+            <h3>datapath.c — hook into .pre_exit</h3>
+            <pre><code>+static void __net_exit ovs_pre_exit_net(struct net *dnet)
++{
++	ovs_lock();
++	ovs_ct_exit_start(dnet);
++	ovs_unlock();
++}
++
+ static void __net_exit ovs_exit_net(struct net *dnet)
+ {
+ 	...
+ 	ovs_lock();
+ 
+-	ovs_ct_exit(dnet);
++	ovs_ct_exit_finish(dnet);
+ 	...
+ }
+ 
+ static struct pernet_operations ovs_net_ops = {
+ 	.init = ovs_init_net,
++	.pre_exit = ovs_pre_exit_net,
+ 	.exit = ovs_exit_net,
+ 	...
+ };</code></pre>
+            <p>The old <code>ovs_ct_exit()</code> is split into <code>ovs_ct_exit_start()</code> / <code>ovs_ct_exit_finish()</code> (the conntrack.h hunk is just the declaration change plus stubs for the <code>!CONFIG_NF_CONNTRACK</code> case). Detach happens in a brand-new <code>.pre_exit</code> pernet callback under <code>ovs_mutex</code>; freeing stays in <code>.exit</code>. Between the two, the pernet core in <code>net/core/net_namespace.c</code> runs a grace period — that's the load-bearing guarantee, and I verify it from source in the investigation section below. <code>ovs_ct_exit_start()</code> stashes the detached pointer in <code>ovs_net-&gt;ct_limit_exit_data</code>, which <code>ovs_ct_exit_finish()</code> picks up and frees.</p>
+
+            <h3>SET/DEL handlers — dereference under ovs_mutex</h3>
+            <pre><code>-static int ovs_ct_limit_set_zone_limit(struct nlattr *nla_zone_limit,
+-					struct ovs_ct_limit_info *info)
++static int ovs_ct_limit_set_zone_limit(struct ovs_net *ovs_net,
++				       struct nlattr *nla_zone_limit)
+ {
+ 	...
+ 		ovs_lock();
++		info = ovsl_dereference(ovs_net-&gt;ct_limit_info);
+ 		info-&gt;default_limit = zone_limit-&gt;limit;
+ 		ovs_unlock();</code></pre>
+            <p>The netlink SET and DEL paths used to receive <code>ct_limit_info</code> as an argument, read once by the caller from the (previously unprotected) field. Now that the field is <code>__rcu</code>, the handlers take <code>ovs_net</code> instead and fetch the pointer with <code>ovsl_dereference()</code> — the "under ovs_lock" dereference helper — at each of the three mutation sites (set default limit, set zone limit, delete zone limit), inside the existing <code>ovs_lock()</code>/<code>ovs_unlock()</code> critical sections. The mutex serializes these updates against <code>.pre_exit</code>'s <code>rcu_replace_pointer()</code>, so a mutation can never act on a half-detached state.</p>
+
+            <h3>GET handler — rcu_read_lock around the traversal</h3>
+            <pre><code>+	rcu_read_lock();
++	ct_limit_info = rcu_dereference(ovs_net-&gt;ct_limit_info);
+ 	if (a[OVS_CT_LIMIT_ATTR_ZONE_LIMIT]) {
+ 		err = ovs_ct_limit_get_zone_limit(...);
+-		if (err)
+-			goto exit_err;
+ 	} else {
+ 		err = ovs_ct_limit_get_all_zone_limit(...);
+-		if (err)
+-			goto exit_err;
+ 	}
++	rcu_read_unlock();
++	if (err)
++		goto exit_err;</code></pre>
+            <p>Previously the two GET helpers each took and dropped their own inner <code>rcu_read_lock()</code> around list walks, but the top-level load of <code>ct_limit_info</code> happened before any of that, unprotected. The fix hoists one read-side critical section to cover both the <code>rcu_dereference()</code> and the entire traversal, drops the now-redundant inner locking (the helpers get "Called with RCU read lock held" comments), and simplifies the error paths to a single <code>return err</code> / shared <code>goto exit_err</code> after the unlock.</p>
+
+            <h3>Why the netlink handlers need no NULL checks</h3>
+            <p>A natural review question: after the pointer can become NULL, don't SET/DEL/GET need to handle that? The commit message answers it directly, and it's worth understanding rather than pattern-matching:</p>
+            <pre><code>The netlink command handlers do not need NULL checks because the userspace
+netlink socket holds an active reference to its network namespace while a
+request is processed. The per-netns exit path therefore cannot run
+concurrently with SET, DEL, or GET for that socket's namespace.</code></pre>
+            <p>While a genetlink request for namespace N is being processed, the socket pins N. <code>cleanup_net()</code> cannot get past the namespace's reference count, so <code>ovs_pre_exit_net()</code> for N simply cannot run concurrently with a CT limit netlink command for N — the pointer seen by those handlers is always live. The datapath is different: packets can still be in flight on a vport while teardown begins, which is exactly why <code>ovs_ct_check_limit()</code> alone got the NULL check.</p>
+
+            <h2>How it was investigated</h2>
+            <p>I want to be honest about the shape of this investigation: it was code analysis and review, not a heroic debugging session. There was no KASAN splat on my machine and no runtime reproducer logs to paste here — the bug was identified by auditing the lifetime rules of the CT limit state, and confirmed by reading the locking on both sides. The git archaeology looked like this.</p>
+            <p>First, confirm the reader and its context — that the CT limit check really is reachable from packet processing under RCU:</p>
+            <pre><code>$ git grep -n "ovs_ct_execute" -- net/openvswitch/
+net/openvswitch/actions.c:1386: err = ovs_ct_execute(ovs_dp_get_net(dp), skb, key, ...)
+
+$ grep -n "rcu_read_lock" net/openvswitch/datapath.c
+685:	rcu_read_lock();          /* ovs_dp_process_packet() */
+706:	err = ovs_execute_actions(dp, packet, sf_acts, &amp;flow-&gt;key);</code></pre>
+            <p>Then trace the lifetime of the teardown function back to its origin, to find which commit introduced the pattern (needed for the <code>Fixes:</code> tag and the stable backport decision):</p>
+            <pre><code>$ git log -L :ovs_ct_limit_exit:net/openvswitch/conntrack.c
+...
+commit 11efd5cb04a184eea4f57b68ea63dddd463158d1
+Author: Yi-Hung Wei &lt;yihung.wei@gmail.com&gt;
+Date:   Thu May 24 17:56:43 2018 -0700
+
+    openvswitch: Support conntrack zone limit
+
+$ git show 11efd5cb04a1 --stat
+ net/openvswitch/conntrack.c | 551 +++++++++++++++++++++++++++++++++-
+ ...</code></pre>
+            <p>So the pattern — synchronous free of RCU-read state, pointer left dangling — was born with the feature itself in May 2018 and survived roughly eight years and many later cleanups (<code>git log --oneline -- net/openvswitch/conntrack.c</code> shows the file churning around it). That earned the patch its <code>Fixes: 11efd5cb04a1 ("openvswitch: Support conntrack zone limit")</code> tag and a <code>Cc: stable@vger.kernel.org</code>.</p>
+            <p>The last piece of diligence was verifying the load-bearing assumption of the fix design: that the pernet core really does insert an RCU grace period between <code>.pre_exit</code> and <code>.exit</code>. Reading <code>net/core/net_namespace.c</code>:</p>
+            <pre><code>$ grep -n "pre_exit\|synchronize_rcu" net/core/net_namespace.c
+...
+	list_for_each_entry_continue_reverse(ops, ops_list, list) {
+		hold_rtnl |= !!ops-&gt;exit_rtnl;
+		ops_pre_exit_list(ops, net_exit_list);
+	}
+
+	/* Another CPU might be rcu-iterating the list, wait for it.
+	 * This needs to be before calling the exit() notifiers, so the
+	 * rcu_barrier() after ops_undo_list() isn't sufficient alone.
+	 * Also the pre_exit() and exit() methods need this barrier.
+	 */
+	if (expedite_rcu)
+		synchronize_rcu_expedited();
+	else
+		synchronize_rcu();
+	...
+	list_for_each_entry_continue_reverse(ops, ops_list, list)
+		ops_exit_list(ops, net_exit_list);</code></pre>
+            <p><code>cleanup_net()</code> calls <code>ops_undo_list(..., true)</code>, so the expedited grace period runs after all <code>.pre_exit</code> callbacks and before any <code>.exit</code> callback — the source comment even spells out "the pre_exit() and exit() methods need this barrier." That's exactly the sequencing the fix relies on, which is why <code>ovs_ct_limit_exit_finish()</code> can use plain <code>kfree()</code> with no synchronization of its own. Design verified against the implementation, not against documentation.</p>
 
             <h2>Upstream</h2>
-            <p>The fix was reviewed by Ilya Maximets and applied by Jakub Kicinski, landing in mainline as <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=403f96c32c9e24600093d7d0c61c17daeedca957" target="_blank" rel="noopener">403f96c32c9e</a> ("openvswitch: Fix CT limit teardown use-after-free"), with a <code>Fixes:</code> tag back to <code>11efd5cb04a1</code>, the commit that introduced conntrack zone limits — and a stable backport.</p>
-            <p>Takeaway: when the fast path is RCU and the slow path frees, the bug is rarely in the reader. It's in the teardown that forgot RCU existed.</p>
+            <p>The timeline, from the public record:</p>
+            <ul>
+                <li><strong>2026-07-22</strong> — first posting to netdev and dev@openvswitch.org (<a href="https://lore.kernel.org/all/cover.1784711445.git.xuyuqiabc@gmail.com/" target="_blank" rel="noopener">cover letter on lore</a>).</li>
+                <li><strong>July–August 2026</strong> — a long review cycle; the series went through nine revisions. The final posting is <a href="https://lore.kernel.org/all/288fbd5459d92b9dd0dcc6faf625f04819161ff3.1787280296.git.xuyuqiabc@gmail.com/" target="_blank" rel="noopener">[PATCH net v9] on lore</a>, sent 2026-08-21.</li>
+                <li><strong>2026-08-21</strong> — <code>Reviewed-by: Ilya Maximets</code> (the OVS userspace/upstream maintainer most active in this area), in addition to <code>Reviewed-by: Ren Wei</code> carried from earlier rounds. Applied by Jakub Kicinski the same day.</li>
+                <li><strong>2026-08-24</strong> — reached mainline as commit <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=403f96c32c9e24600093d7d0c61c17daeedca957" target="_blank" rel="noopener">403f96c32c9e24600093d7d0c61c17daeedca957</a> ("openvswitch: Fix CT limit teardown use-after-free").</li>
+            </ul>
+            <p>Credits on the commit: <code>Reported-by: Vega</code>, <code>Co-developed-by: Nan Li</code> (who shares the Signed-off-by), and the <code>Fixes: 11efd5cb04a1</code> plus <code>Cc: stable@vger.kernel.org</code> tags route it to the stable trees, since the bug has existed since the feature was merged in 2018.</p>
+
+            <h2>Takeaway</h2>
+            <p>When the fast path is RCU and the slow path frees, the bug is rarely in the reader — it's in the teardown that forgot RCU existed. And before reaching for <code>synchronize_rcu()</code>, check the framework you're already inside: here the pernet core had been providing exactly the right grace period all along, at exactly the right place, for anyone who split their teardown across <code>.pre_exit</code> and <code>.exit</code>.</p>
         </div>
     </div>
 

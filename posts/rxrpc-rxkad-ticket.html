@@ -29,34 +29,178 @@
         </header>
 
         <div class="article-content">
-            <p>RxRPC is the kernel's RPC transport, best known as the protocol underneath AFS. Its rxkad security class authenticates peers by exchanging encrypted tickets. This post is about a missing return-value check in the ticket decryption path — a one-line-class bug with a long pedigree.</p>
+            <p>This is the writeup of a small fix I made in the kernel's RxRPC implementation: a missing return-value check on <code>crypto_skcipher_decrypt()</code> in the rxkad ticket-decryption path. The patch itself is four lines, but the story around it — how the bug works, how old it is, and why this class of mistake keeps surviving in security code — is worth a longer post. Everything below is taken from the real commit and the real source tree; no logs or traces are invented.</p>
+
+            <h2>rxkad in one paragraph</h2>
+            <p>RxRPC is the RPC transport that lives in <code>net/rxrpc/</code>, best known as the protocol underneath the kernel's AFS client. It carries calls over UDP and supports pluggable security classes. The classic one is <strong>rxkad</strong> (<code>net/rxrpc/rxkad.c</code>), a Kerberos-IV-style handshake: a client connects to a server, the server sends a CHALLENGE packet, and the client answers with a RESPONSE packet that embeds a Kerberos <em>ticket</em> — a blob encrypted with the server's secret key. The server decrypts the ticket with <code>pcbc(des)</code>, and inside it finds the session key, the client principal's name, a lifetime, and an issue timestamp. If the ticket decrypts and parses cleanly, the server trusts the session key inside it and the connection becomes secure. The ticket bytes come straight off the wire, from the client.</p>
 
             <h2>The bug</h2>
-            <p>When a RESPONSE packet arrives, <code>rxkad_decrypt_ticket()</code> decrypts the embedded ticket and then parses the result as plaintext: extracting addresses, lifetimes, key material, and so on. The decryption call looked like this:</p>
-            <pre><code>skcipher_request_set_crypt(req, sg, sg, ticket_len, iv.x);
-crypto_skcipher_decrypt(req);
-skcipher_request_free(req);
+            <p>On the server side, when a RESPONSE packet arrives, the connection-event handler (<code>rxrpc_input_conn_event()</code> in <code>net/rxrpc/conn_event.c</code>) dispatches on the packet type; for <code>RXRPC_PACKET_TYPE_RESPONSE</code> it calls <code>rxrpc_verify_response()</code>, which invokes the security class's <code>verify_response</code> op — <code>rxkad_verify_response()</code> for rxkad. That function copies the response header out of the skb, sanity-checks the version, the key version number, and the ticket length, then copies the ticket itself into a kmalloc'd buffer and hands it to <code>rxkad_decrypt_ticket()</code>:</p>
+            <pre><code>	/* extract the kerberos ticket and decrypt and decode it */
+	ret = -ENOMEM;
+	ticket = kmalloc(ticket_len, GFP_NOFS);
+	if (!ticket)
+		goto temporary_error_free_resp;
 
-p = ticket;
-end = p + ticket_len;
-/* parse away... */</code></pre>
-            <p>The return value of <code>crypto_skcipher_decrypt()</code> was simply discarded. But decryption <em>can</em> fail — most obviously when the ticket length is not a multiple of the cipher block size. A malformed RESPONSE can pick exactly such a length, make the decrypt operation fail, and the code then cheerfully drives the ticket parser over whatever bytes are in the buffer: attacker-controlled ciphertext, never touched by the cipher at all.</p>
+	if (skb_copy_bits(skb, sizeof(struct rxrpc_wire_header) + sizeof(*response),
+			  ticket, ticket_len) &lt; 0) {
+		rxrpc_abort_conn(conn, skb, RXKADPACKETSHORT, -EPROTO,
+				 rxkad_abort_resp_short_tkt);
+		goto protocol_error;
+	}
+
+	ret = rxkad_decrypt_ticket(conn, server_key, skb, ticket, ticket_len,
+				   &amp;session_key, &amp;expiry);</code></pre>
+            <p>The length check just before this is a range check only — <code>ticket_len &lt; 4 || ticket_len &gt; MAXKRB5TICKETLEN</code> — with no alignment requirement. Now the vulnerable code, as it existed before the fix (<code>fe4447cd9562~1:net/rxrpc/rxkad.c</code>):</p>
+            <pre><code>	req = skcipher_request_alloc(server_key-&gt;payload.data[0], GFP_NOFS);
+	if (!req)
+		return -ENOMEM;
+
+	sg_init_one(&amp;sg[0], ticket, ticket_len);
+	skcipher_request_set_callback(req, 0, NULL, NULL);
+	skcipher_request_set_crypt(req, sg, sg, ticket_len, iv.x);
+	crypto_skcipher_decrypt(req);
+	skcipher_request_free(req);
+
+	p = ticket;
+	end = p + ticket_len;</code></pre>
+            <p>The return value of <code>crypto_skcipher_decrypt()</code> is simply discarded. The buffer is then treated as plaintext. But a skcipher decryption <em>can</em> fail: the server key's cipher is <code>pcbc(des)</code> (allocated in <code>rxkad_preparse_server_key()</code>), a block mode with an 8-byte block size, and the crypto API rejects a request whose length is not a multiple of the block size — typically with <code>-EINVAL</code>, without touching the buffer at all.</p>
+            <p>So the failure mode is deterministic and fully attacker-controlled: send a RESPONSE whose ticket length passes the range check but is not block-aligned — say 9 bytes, or 25 — and the decrypt operation fails, leaving the buffer exactly as it arrived from the network. Execution then falls through into the ticket parser with <code>p = ticket</code> pointing at raw, attacker-chosen ciphertext that the cipher never touched.</p>
+
+            <h2>What the parser does next</h2>
+            <p>The parsing that follows is not trivial. The same function walks the buffer field by field, and several of the fields have real consequences downstream. Here is the actual pre-fix code (lightly trimmed for width):</p>
+            <pre><code>	/* extract the ticket flags */
+	little_endian = *p &amp; 1;
+	p++;
+
+	/* extract the authentication name */
+	name = Z(ANAME, aname);
+	/* extract the principal's instance */
+	name = Z(INST, inst);
+	/* extract the principal's authentication domain */
+	name = Z(REALM, realm);
+
+	if (end - p &lt; 4 + 8 + 4 + 2)
+		return rxrpc_abort_conn(conn, skb, RXKADBADTICKET, -EPROTO,
+					rxkad_abort_resp_tkt_short);
+
+	/* get the IPv4 address of the entity that requested the ticket */
+	memcpy(&amp;addr, p, sizeof(addr));
+	p += 4;
+
+	/* get the session key from the ticket */
+	memcpy(&amp;key, p, sizeof(key));
+	p += 8;
+	memcpy(_session_key, &amp;key, sizeof(key));
+
+	/* get the ticket's lifetime */
+	life = *p++ * 5 * 60;
+
+	/* get the issue time of the ticket */
+	if (little_endian) {
+		__le32 stamp;
+		memcpy(&amp;stamp, p, 4);
+		issue = rxrpc_u32_to_time64(le32_to_cpu(stamp));
+	} else {
+		__be32 stamp;
+		memcpy(&amp;stamp, p, 4);
+		issue = rxrpc_u32_to_time64(be32_to_cpu(stamp));
+	}
+	p += 4;
+	now = ktime_get_real_seconds();
+
+	/* check the ticket is in date */
+	if (issue &gt; now)
+		return rxrpc_abort_conn(conn, skb, RXKADNOAUTH, -EKEYREJECTED,
+					rxkad_abort_resp_tkt_future);
+	if (issue &lt; now - life)
+		return rxrpc_abort_conn(conn, skb, RXKADEXPIRED, -EKEYEXPIRED,
+					rxkad_abort_resp_tkt_expired);</code></pre>
+            <p>Read that as an attacker: every byte is of my choosing. The <code>Z()</code> macro scans for NUL-terminated printable strings (the authentication name, instance, realm, and later the service names) with per-field length caps, so those are bounded — but the attacker controls whether they pass. Then come the fields that really matter:</p>
+            <ul>
+                <li><strong>The session key</strong> — 8 bytes copied straight out of the buffer into <code>_session_key</code>. This is the key the server will use for the rest of the connection.</li>
+                <li><strong>The lifetime and issue time</strong> — attacker-controlled, so the validity check (<code>issue &gt; now</code>, <code>issue &lt; now - life</code>) can be satisfied by construction: pick <code>little_endian</code> and four bytes that decode to "right now".</li>
+                <li><strong>The claimed client IPv4 address</strong> — likewise attacker-chosen.</li>
+            </ul>
+            <p>Does this alone hand the attacker a fully authenticated session? Not by itself — back in <code>rxkad_verify_response()</code>, the extracted session key is used to decrypt the response's encrypted block (<code>rxkad_decrypt_response()</code>), and the epoch, connection ID, security index, and checksum inside must match. But that is precisely the point: the security boundary of the whole handshake is "the ticket decrypted under the server's key", and the unchecked return value silently demotes it to "the ticket is whatever bytes the client sent". The parser was never designed to run on unauthenticated input, yet that is exactly what it was doing. A bug like this is a foothold: it gives an attacker a fully controllable buffer flowing through a privileged parser, and it erases the assumption every later check is built on.</p>
+
+            <h2>How old is it</h2>
+            <p>The <code>Fixes:</code> tag on the fix commit points all the way back:</p>
+            <pre><code>Fixes: 17926a79320a ("[AF_RXRPC]: Provide secure RxRPC sockets for use by userspace and kernel both")</code></pre>
+            <p>That commit, by David Howells, is dated <strong>2007-04-26</strong> — the original rxkad implementation, added when the new AF_RXRPC was introduced. And the bug is literally there in the initial version of the function:</p>
+            <pre><code>	sg_init_one(&amp;ssg[0], ticket, ticket_len);
+	memcpy(dsg, ssg, sizeof(dsg));
+	crypto_blkcipher_decrypt_iv(&amp;desc, dsg, ssg, ticket_len);
+
+	p = ticket;
+	end = p + ticket_len;</code></pre>
+            <p>Same shape: decrypt into the buffer, ignore the result, start parsing. The archaeology is easy to reproduce:</p>
+            <pre><code>$ git log --oneline -S 'crypto_skcipher_decrypt(req)' -- net/rxrpc/rxkad.c
+432042e25e33 net/rxrpc: Reimplement DES-PCBC using DES library
+97b768514a6e net/rxrpc: Use local FCrypt-PCBC implementation
+1afe593b4239 rxrpc: Use skcipher
+
+$ git log -L '/^static int rxkad_decrypt_ticket/,/^}/:net/rxrpc/rxkad.c'</code></pre>
+            <p>The <code>-L</code> trace shows the function being touched again and again over nineteen years — <code>1afe593b4239</code> ("rxrpc: Use skcipher", 2016) mechanically converted <code>crypto_blkcipher_decrypt_iv()</code> to <code>crypto_skcipher_decrypt()</code>; <code>a263629da519</code> moved the SG list off the stack; <code>ef68622da9cc</code> reworked error handling; <code>fb46f6ee10e7</code> added the abort-reason tracepoints; <code>10674a03c633</code> converted <code>time_t</code> to <code>time64_t</code> — and every single change faithfully preserved the discarded return value. The unchecked call survived three generations of crypto API (<code>blkcipher</code> → <code>skcipher</code> → the later DES-library rewrite) without anyone asking whether it could fail. Nineteen years, in a security class, in a function whose entire job is to establish trust. "This code is ancient, surely someone has checked it" is not an argument; it's often exactly backwards. Old code has mostly been <em>ported</em>, not <em>audited</em>.</p>
 
             <h2>The fix</h2>
-            <p>Check the result, and treat a failed decrypt like any other bad ticket — abort the connection with <code>RXKADBADTICKET</code>:</p>
-            <pre><code>ret = crypto_skcipher_decrypt(req);
-skcipher_request_free(req);
-if (ret &lt; 0)
-	return rxrpc_abort_conn(conn, skb, RXKADBADTICKET, -EPROTO,
-				rxkad_abort_resp_tkt_short);</code></pre>
-            <p>After the fix, a ticket that cannot be decrypted never reaches the parser. The abort also carries a distinct tracepoint tag (<code>rxkad_abort_resp_tkt_short</code>), so the failure is observable when debugging.</p>
+            <p>The patch, in full:</p>
+            <pre><code>@@ -958,6 +958,7 @@ static int rxkad_decrypt_ticket(struct rxrpc_connection *conn,
+ 	struct in_addr addr;
+ 	unsigned int life;
+ 	time64_t issue, now;
++	int ret;
+ 	bool little_endian;
+ 	u8 *p, *q, *name, *end;
 
-            <h2>How old was it?</h2>
-            <p>The <code>Fixes:</code> tag points to <code>17926a79320a</code> ("[AF_RXRPC]: Provide secure RxRPC sockets…") — the original rxkad implementation. The unchecked call had been sitting there essentially since the code existed, surviving every refactor of the crypto API around it. A nice reminder that "the code is old" is not evidence that it is correct; it's often the opposite.</p>
+@@ -977,8 +978,11 @@ static int rxkad_decrypt_ticket(struct rxrpc_connection *conn,
+ 	sg_init_one(&amp;sg[0], ticket, ticket_len);
+ 	skcipher_request_set_callback(req, 0, NULL, NULL);
+ 	skcipher_request_set_crypt(req, sg, sg, ticket_len, iv.x);
+-	crypto_skcipher_decrypt(req);
++	ret = crypto_skcipher_decrypt(req);
+ 	skcipher_request_free(req);
++	if (ret &lt; 0)
++		return rxrpc_abort_conn(conn, skb, RXKADBADTICKET, -EPROTO,
++					rxkad_abort_resp_tkt_short);
+
+ 	p = ticket;
+ 	end = p + ticket_len;</code></pre>
+            <p>Three things to note:</p>
+            <ul>
+                <li><strong>Capture the result, free the request first.</strong> <code>skcipher_request_free(req)</code> is unconditional, so the failure path doesn't leak the request; only then is <code>ret</code> tested.</li>
+                <li><strong>Fail the same way as every other bad ticket.</strong> <code>RXKADBADTICKET</code> is the rxkad abort code already defined in <code>include/uapi/linux/rxrpc.h</code> ("security object was passed a bad ticket") and already used by every other rejection in this parser. A decrypt failure <em>is</em> a bad ticket, so it gets the same treatment: <code>rxrpc_abort_conn()</code> (in <code>net/rxrpc/conn_event.c</code>) marks the connection aborted with the given abort code and error, pokes the connection to send the ABORT packet to the peer, and returns <code>-EPROTO</code> up the stack. The parser never runs.</li>
+                <li><strong>Observability.</strong> The abort carries the tracepoint tag <code>rxkad_abort_resp_tkt_short</code>, which renders as <code>rxkad-resp-tk-short</code> in the <code>rxrpc_abort</code> trace event (<code>include/trace/events/rxrpc.h</code>). It's the same tag used for the "ticket too short for the fixed fields" case — a malformed, undecryptable ticket is morally the same thing — and it means the rejection shows up in traces instead of failing silently.</li>
+            </ul>
+
+            <h2>How it was investigated / verified</h2>
+            <p>Honestly: this was code-path analysis, not a crash chase. There was no oops, no KASAN report, and I have no runtime logs to show — so there are none in this post. The chain of reasoning was:</p>
+            <ul>
+                <li>Start at packet receipt: <code>rxrpc_input_conn_event()</code> → <code>RXRPC_PACKET_TYPE_RESPONSE</code> → <code>rxrpc_verify_response()</code> → the security class's <code>verify_response</code> op → <code>rxkad_verify_response()</code>. Confirm that <code>ticket</code> and <code>ticket_len</code> come straight from the wire via <code>skb_copy_bits()</code>, with only a range check on the length.</li>
+                <li>Read <code>rxkad_decrypt_ticket()</code> and notice the discarded return value on <code>crypto_skcipher_decrypt()</code>.</li>
+                <li>Confirm the failure is reachable: the cipher is <code>pcbc(des)</code>, block size 8, and the crypto API rejects non-block-aligned request lengths — so a malformed RESPONSE chooses the failure.</li>
+                <li>Read the parser to establish impact: attacker-controlled session key, timestamps, address, and principal strings flowing into the connection.</li>
+                <li>Match the fix to the existing idiom: every neighbouring parse failure already aborts with <code>RXKADBADTICKET</code>, so the decrypt failure should too.</li>
+            </ul>
+            <p>The fix was then verified by reading it against the tree (it applies cleanly, the abort path is well-formed, no leak of <code>req</code> or <code>ticket</code> — the caller frees <code>ticket</code> on the error path) and by review on the mailing list.</p>
 
             <h2>Upstream</h2>
-            <p>David Howells picked the fix up into his rxrpc series, and it landed in mainline as <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=fe4447cd95623b1cfacc15f280aab73a6d7340b2" target="_blank" rel="noopener">fe4447cd9562</a> ("rxrpc: reject undecryptable rxkad response tickets"), with a stable backport.</p>
-            <p>Takeaway: in security-critical paths, an unchecked <code>crypto_*</code> return value is never a style issue. Assume every cryptographic operation can fail, and decide explicitly what the failure means before the data moves on.</p>
+            <p>I sent the patch on 2026-04-08. David Howells (the RxRPC/AFS maintainer — and the author of the 2007 code being fixed) picked it up into his rxrpc series, and it was applied to net-next and merged into mainline the same day as commit <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=fe4447cd95623b1cfacc15f280aab73a6d7340b2" target="_blank" rel="noopener"><code>fe4447cd95623b1cfacc15f280aab73a6d7340b2</code></a> ("rxrpc: reject undecryptable rxkad response tickets"), signed off by Jakub Kicinski, with a Cc to stable for backporting.</p>
+            <p>The credits from the commit message, because they matter — this was a team effort:</p>
+            <pre><code>Reported-by: Yifan Wu &lt;yifanwucs@gmail.com&gt;
+Reported-by: Juefei Pu &lt;tomapufckgml@gmail.com&gt;
+Co-developed-by: Yuan Tan &lt;yuantan098@gmail.com&gt;
+Signed-off-by: Yuan Tan &lt;yuantan098@gmail.com&gt;
+Suggested-by: Xin Liu &lt;bird@lzu.edu.cn&gt;
+Tested-by: Ren Wei &lt;enjou1224z@gmail.com&gt;
+Signed-off-by: Yuqi Xu &lt;xuyuqiabc@gmail.com&gt;
+Signed-off-by: Ren Wei &lt;n05ec@lzu.edu.cn&gt;
+Signed-off-by: David Howells &lt;dhowells@redhat.com&gt;
+Signed-off-by: Jakub Kicinski &lt;kuba@kernel.org&gt;</code></pre>
+            <p>One postscript: shortly afterwards, commit <code>432042e25e33</code> ("net/rxrpc: Reimplement DES-PCBC using DES library") replaced the skcipher machinery in this function with a direct DES-PCBC implementation — and kept the rejection, now as an explicit <code>ticket_len % DES_BLOCK_SIZE != 0</code> check with the same <code>RXKADBADTICKET</code> abort. The fix survived the rewrite, which is exactly what you want to see.</p>
+
+            <h2>Takeaway</h2>
+            <p>Every cryptographic operation can fail, and the failure mode is rarely the one you first imagine — here it wasn't a padding oracle or a weak cipher, just a length check inside the crypto API. The rule is simple: the return value of a <code>crypto_*</code> operation is part of the security boundary, not a style detail. Decide explicitly what failure means — and make sure the data does not move on until you have.</p>
         </div>
     </div>
 
