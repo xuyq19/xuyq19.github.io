@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fixing a use-after-free in Open vSwitch conntrack zone limits — Yuqi Xu</title>
+    <link rel="stylesheet" href="../css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-container">
+            <a href="../index.html" class="nav-logo">xuyq</a>
+            <div class="nav-links">
+                <a href="../index.html">Home</a>
+                <a href="../resume.html">Résumé</a>
+                <a href="index.html">Blog</a>
+                <a href="https://github.com/xuyq19" target="_blank" rel="noopener">GitHub</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="article-page">
+        <header class="article-header">
+            <h1>Fixing a use-after-free in Open vSwitch conntrack zone limits</h1>
+            <p class="article-meta">First posted 2026-07-22 · merged into mainline 2026-08-24 · openvswitch, RCU, netns teardown</p>
+        </header>
+
+        <div class="article-content">
+            <p>Open vSwitch lets you cap the number of conntrack entries per zone — the "CT limit" feature. The per-zone accounting state lives in kernel memory attached to the network namespace. This post is about a use-after-free in the way that state was torn down, and why the correct fix turned out to be a restructuring of the teardown rather than another NULL check.</p>
+
+            <h2>The bug</h2>
+            <p>Two sides touch the CT limit state with different locking:</p>
+            <ul>
+                <li>The <strong>datapath</strong> reads it on every packet that goes through a conntrack action — under RCU, in <code>ovs_ct_execute()</code>, no mutex allowed on this fast path.</li>
+                <li><strong>Netns teardown</strong> freed that same state while holding <code>ovs_mutex</code>, in the pernet exit callback.</li>
+            </ul>
+            <p>The CT limit pointer was never removed from readers before being freed, and there was no RCU grace period between the free and the readers. So a packet hitting the datapath at the wrong moment during namespace teardown would dereference freed memory:</p>
+            <pre><code>slab-use-after-free in ovs_ct_execute()</code></pre>
+            <p>What makes this bug serious is who can reach it: an unprivileged user inside a user namespace can create their own network namespace, configure CT limits, and tear the namespace down. No capabilities on the host required.</p>
+
+            <h2>Why the obvious fixes are wrong</h2>
+            <p>The tempting one-liner — "just check for NULL in the reader" — doesn't work here. The reader never saw a NULL pointer; it saw a <em>stale</em> pointer to already-freed memory. Adding NULL checks after the free has already happened fixes nothing. The real invariant that was missing: <strong>a pointer that is read under RCU must be unpublished and grace-period-protected before its memory is released.</strong></p>
+
+            <h2>The fix</h2>
+            <p>The patch restructures the lifetime of the CT limit state around that invariant:</p>
+            <ul>
+                <li>Publish the CT limit pointer through RCU, so all readers and writers agree on how it appears.</li>
+                <li>On teardown, <strong>remove</strong> the state from the visible lists first (in the pernet <code>.pre_exit</code> callback, still under <code>ovs_mutex</code>), then wait for readers.</li>
+                <li>Defer the actual free to the pernet <code>.exit</code> callback. The pernet core already guarantees an RCU grace period between <code>.pre_exit</code> and <code>.exit</code>, so the free happens after every in-flight reader is done — no extra synchronization needed.</li>
+                <li>Keep <code>ovs_mutex</code> around individual CT limit updates, and take the RCU read-side lock where the netlink GET handler walks the limit lists.</li>
+            </ul>
+            <p>One subtlety that came up during review: the netlink command handlers (SET/DEL/GET) do <em>not</em> need new NULL checks, even though the state can now disappear. A userspace netlink socket holds an active reference to its network namespace while a request is being processed, so the pernet exit path cannot run concurrently with netlink operations for that namespace.</p>
+
+            <h2>Upstream</h2>
+            <p>The fix was reviewed by Ilya Maximets and applied by Jakub Kicinski, landing in mainline as <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=403f96c32c9e24600093d7d0c61c17daeedca957" target="_blank" rel="noopener">403f96c32c9e</a> ("openvswitch: Fix CT limit teardown use-after-free"), with a <code>Fixes:</code> tag back to <code>11efd5cb04a1</code>, the commit that introduced conntrack zone limits — and a stable backport.</p>
+            <p>Takeaway: when the fast path is RCU and the slow path frees, the bug is rarely in the reader. It's in the teardown that forgot RCU existed.</p>
+        </div>
+    </div>
+
+    <footer class="footer">
+        <div class="footer-container">
+            <p>© 2026 Yuqi Xu</p>
+            <div class="footer-links">
+                <a href="index.html">All posts</a>
+                <a href="https://github.com/xuyq19" target="_blank" rel="noopener">GitHub</a>
+            </div>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blog — Yuqi Xu</title>
+    <link rel="stylesheet" href="../css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-container">
+            <a href="../index.html" class="nav-logo">xuyq</a>
+            <div class="nav-links">
+                <a href="../index.html">Home</a>
+                <a href="../resume.html">Résumé</a>
+                <a href="index.html" class="active">Blog</a>
+                <a href="https://github.com/xuyq19" target="_blank" rel="noopener">GitHub</a>
+            </div>
+        </div>
+    </nav>
+
+    <section class="section" style="padding-top: 104px;">
+        <div class="container">
+            <h2 class="section-title">Blog</h2>
+            <p class="section-lede">Notes on Linux kernel bugs I have found and fixed. Dates are when the first version of each patch was posted to the mailing list.</p>
+            <div class="post-list">
+                <div class="post-card">
+                    <div class="post-date">2026-07-22</div>
+                    <h3 class="post-title"><a href="ovs-ct-limit-uaf.html">Fixing a use-after-free in Open vSwitch conntrack zone limits</a></h3>
+                    <p class="post-excerpt">Packet processing reads CT limit state under RCU while netns teardown frees it under a mutex — with no grace period in between. How an unprivileged user could turn that into a slab-use-after-free, and how the fix restructures the teardown.</p>
+                    <div class="post-tags"><span class="tag">openvswitch</span><span class="tag">uaf</span><span class="tag">rcu</span><span class="tag">netns</span></div>
+                </div>
+                <div class="post-card">
+                    <div class="post-date">2026-05-24</div>
+                    <h3 class="post-title"><a href="bpf-sockmap-push-data.html">An off-by-a-message offset in bpf_msg_push_data()</a></h3>
+                    <p class="post-excerpt">A one-character-class bug in the sockmap helper: a page-local fragment offset was advanced by a message-global insertion point. One line fixes it — finding that line was the hard part.</p>
+                    <div class="post-tags"><span class="tag">bpf</span><span class="tag">sockmap</span><span class="tag">scatterlist</span></div>
+                </div>
+                <div class="post-card">
+                    <div class="post-date">2026-04-13</div>
+                    <h3 class="post-title"><a href="cfg80211-duplicate-cipher-suites.html">Rejecting duplicate cipher suites in wiphy_register()</a></h3>
+                    <p class="post-excerpt">Duplicate WEP entries in a wiphy description could overflow a fixed-size array in the WEXT compatibility code. The fix moves the invariant to where it belongs: registration time.</p>
+                    <div class="post-tags"><span class="tag">wifi</span><span class="tag">cfg80211</span><span class="tag">wext</span></div>
+                </div>
+                <div class="post-card">
+                    <div class="post-date">2026-04-08</div>
+                    <h3 class="post-title"><a href="rxrpc-rxkad-ticket.html">When decryption fails but parsing continues: an rxkad ticket bug</a></h3>
+                    <p class="post-excerpt">rxkad_decrypt_ticket() never checked whether crypto_skcipher_decrypt() succeeded, letting a malformed RESPONSE drive the ticket parser with attacker-controlled bytes.</p>
+                    <div class="post-tags"><span class="tag">rxrpc</span><span class="tag">rxkad</span><span class="tag">crypto</span></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <footer class="footer">
+        <div class="footer-container">
+            <p>© 2026 Yuqi Xu</p>
+            <div class="footer-links">
+                <a href="mailto:xuyuqiabc@gmail.com">Email</a>
+                <a href="https://github.com/xuyq19" target="_blank" rel="noopener">GitHub</a>
+            </div>
+        </div>
+    </footer>
+</body>
+</html>

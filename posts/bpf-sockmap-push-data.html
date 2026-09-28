@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>An off-by-a-message offset in bpf_msg_push_data() — Yuqi Xu</title>
+    <link rel="stylesheet" href="../css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-container">
+            <a href="../index.html" class="nav-logo">xuyq</a>
+            <div class="nav-links">
+                <a href="../index.html">Home</a>
+                <a href="../resume.html">Résumé</a>
+                <a href="index.html">Blog</a>
+                <a href="https://github.com/xuyq19" target="_blank" rel="noopener">GitHub</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="article-page">
+        <header class="article-header">
+            <h1>An off-by-a-message offset in bpf_msg_push_data()</h1>
+            <p class="article-meta">First posted 2026-05-24 · merged into mainline 2026-05-29 · bpf, sockmap, scatterlist</p>
+        </header>
+
+        <div class="article-content">
+            <p>Some of the most satisfying kernel fixes are one-liners. This is the story of one in the sockmap BPF helper <code>bpf_msg_push_data()</code>, where a single wrong operand corrupted the scatterlist layout of a socket message.</p>
+
+            <h2>What the helper does</h2>
+            <p><code>bpf_msg_push_data()</code> lets a sk_msg BPF program insert bytes into the middle of a message. Messages are stored as a scatterlist of page fragments. When the insertion point falls inside an existing SG entry, the helper splits that entry in two: a <em>left fragment</em> covering everything before the insertion point, and a <em>right fragment</em> covering everything after it.</p>
+
+            <h2>The bug</h2>
+            <p>The split code adjusts the right fragment like this:</p>
+            <pre><code>psge-&gt;length = start - offset;
+rsge.length -= psge-&gt;length;
+rsge.offset += start;</code></pre>
+            <p>The problem is the last line. <code>rsge.offset</code> is <strong>page-local</strong> — an offset inside the page backing that SG entry. But <code>start</code> is <strong>message-global</strong> — the insertion point counted from the beginning of the whole message, spanning however many SG entries came before.</p>
+            <p>For an insertion into the very first SG entry the two happen to coincide (<code>offset == 0</code>), so the bug hides. For any later entry, the offset is advanced by far too much, and the split layout becomes inconsistent: the right fragment points somewhere past where it should, and the bytes don't add up.</p>
+
+            <h2>The fix</h2>
+            <p>Advance the offset by the fragment-local delta instead — exactly the number of bytes the left fragment absorbed from the front of the original entry:</p>
+            <pre><code>-rsge.offset += start;
++rsge.offset += start - offset;</code></pre>
+            <p>Since <code>psge-&gt;length = start - offset</code> was computed on the line above, the invariant is easy to verify: left length + right length = original length, and right offset = original offset + left length.</p>
+
+            <h2>Upstream</h2>
+            <p>Merged as <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f72eed9b84fb771019a955908132410a9ba9ea3f" target="_blank" rel="noopener">f72eed9b84fb</a> ("bpf: sockmap: fix tail fragment offset in bpf_msg_push_data"), with a <code>Fixes:</code> tag to <code>6fff607e2f14</code>, the commit that introduced the helper, and a stable backport.</p>
+            <p>Takeaway: whenever two coordinate systems meet — message-global versus page-local here — write down which variable lives in which. The bug was one missing subtraction; the audit to find it was the real work.</p>
+        </div>
+    </div>
+
+    <footer class="footer">
+        <div class="footer-container">
+            <p>© 2026 Yuqi Xu</p>
+            <div class="footer-links">
+                <a href="index.html">All posts</a>
+                <a href="https://github.com/xuyq19" target="_blank" rel="noopener">GitHub</a>
+            </div>
+        </div>
+    </footer>
+</body>
+</html>

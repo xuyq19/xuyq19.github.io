@@ -11,12 +11,12 @@
 <body>
     <nav class="nav">
         <div class="nav-container">
-            <a href="index.html" class="nav-logo">XYQ</a>
+            <a href="index.html" class="nav-logo">xuyq</a>
             <div class="nav-links">
-                <a href="index.html">首页</a>
-                <a href="resume.html" class="active">简历</a>
-                <a href="posts/index.html">文章</a>
-                <a href="https://github.com/xuyq19" target="_blank">GitHub</a>
+                <a href="index.html">Home</a>
+                <a href="resume.html" class="active">Résumé</a>
+                <a href="posts/index.html">Blog</a>
+                <a href="https://github.com/xuyq19" target="_blank" rel="noopener">GitHub</a>
             </div>
         </div>
     </nav>
@@ -106,15 +106,19 @@
             <section class="resume-section">
                 <h2>开源社区贡献</h2>
                 <div class="resume-item">
-                    <p><strong>Linux Kernel 上游</strong> — 提交 6 个安全修复 Patch：</p>
+                    <p><strong>Linux Kernel 上游</strong> — 9 个安全修复 Patch 已合入主线（mainline）：</p>
                     <ul>
+                        <li>openvswitch: Fix CT limit teardown use-after-free</li>
+                        <li>net: ipconfig: bound DHCP option construction</li>
+                        <li>net: rds: clear i_sends on setup unwind</li>
+                        <li>net (rxrpc): reject undecryptable rxkad response tickets</li>
+                        <li>wifi (nl80211): reject oversized EMA RNR lists</li>
+                        <li>wifi (cfg80211): reject duplicate wiphy cipher suite entries</li>
+                        <li>bpf: Check params size before reading reserved fields</li>
+                        <li>bpf (sockmap): fix tail fragment offset in bpf_msg_push_data</li>
                         <li>Bluetooth: hci_sync: reject oversized Broadcast Announcement prepend</li>
-                        <li>WiFi (nl80211): reject oversized EMA RNR lists</li>
-                        <li>BPF (sockmap): fix tail fragment offset in bpf_msg_push_data</li>
-                        <li>Network (RDS): clear i_sends on setup unwind</li>
-                        <li>WiFi (cfg80211): reject duplicate wiphy cipher suite entries</li>
-                        <li>Network (rxrpc): reject undecryptable rxkad response tickets</li>
                     </ul>
+                    <p>另有 TIPC、mac80211、TPM、KEYS 等子系统的修复已进入 maintainer 树。</p>
                     <p><a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/log/?qt=author&q=Yuqi+Xu" target="_blank">查看完整提交记录 →</a></p>
                 </div>
             </section>
@@ -127,7 +131,7 @@
 
     <footer class="footer">
         <div class="footer-container">
-            <p>© 2025 徐宇奇 · 用技术记录成长</p>
+            <p>© 2026 徐宇奇 · 用技术记录成长</p>
         </div>
     </footer>
 </body>

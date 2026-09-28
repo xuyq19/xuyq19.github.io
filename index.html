@@ -1,22 +1,24 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>徐宇奇 | OpenBMC Developer</title>
+    <title>Yuqi Xu — OpenBMC Engineer, Linux Kernel Contributor</title>
+    <meta name="description" content="Yuqi Xu. OpenBMC engineer at Lenovo. Linux kernel contributor with 9 security fixes merged upstream.">
     <link rel="stylesheet" href="css/style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body>
     <nav class="nav">
         <div class="nav-container">
-            <a href="index.html" class="nav-logo">XYQ</a>
+            <a href="index.html" class="nav-logo">xuyq</a>
             <div class="nav-links">
-                <a href="index.html" class="active">首页</a>
-                <a href="resume.html">简历</a>
-
-                <a href="https://github.com/xuyq19" target="_blank">GitHub</a>
+                <a href="index.html" class="active">Home</a>
+                <a href="resume.html">Résumé</a>
+                <a href="posts/index.html">Blog</a>
+                <a href="https://github.com/xuyq19" target="_blank" rel="noopener">GitHub</a>
             </div>
         </div>
     </nav>
@@ -24,62 +26,107 @@
     <header class="hero">
         <div class="hero-container">
             <div class="hero-content">
-                <p class="hero-subtitle">OpenBMC Developer / Linux Kernel Contributor</p>
-                <h1 class="hero-title">徐宇奇</h1>
+                <p class="hero-subtitle">OpenBMC Engineer · Linux Kernel Contributor</p>
+                <h1 class="hero-title">Yuqi Xu</h1>
                 <p class="hero-desc">
-                    联想集团 OpenBMC 开发工程师，专注服务器 BMC 网络模块开发。<br>
-                    6 个 Linux Kernel 安全修复 Patch 已合入上游，熟悉 OpenBMC、Yocto、Redfish、NCSI 等技术栈。
+                    I build BMC firmware at Lenovo and fix bugs in the Linux kernel.
+                    Nine security fixes merged upstream so far, mostly in the
+                    networking and wireless stacks.
                 </p>
                 <div class="hero-actions">
-                    <a href="resume.html" class="btn btn-primary">查看简历</a>
-                    <a href="mailto:xuyq21@lenovo.com" class="btn btn-secondary">联系我</a>
+                    <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/log/?qt=author&q=Yuqi+Xu" target="_blank" rel="noopener" class="btn btn-primary">Kernel commits</a>
+                    <a href="resume.html" class="btn btn-secondary">Résumé</a>
                 </div>
             </div>
             <div class="hero-meta">
                 <div class="meta-item">
-                    <span class="meta-label">当前</span>
-                    <span class="meta-value">联想集团 · OpenBMC 开发工程师</span>
+                    <span class="meta-label">Work</span>
+                    <span class="meta-value">OpenBMC @ Lenovo</span>
                 </div>
                 <div class="meta-item">
-                    <span class="meta-label">地点</span>
-                    <span class="meta-value">中国</span>
+                    <span class="meta-label">Upstream</span>
+                    <span class="meta-value">9 patches in mainline Linux</span>
                 </div>
                 <div class="meta-item">
-                    <span class="meta-label">专注</span>
-                    <span class="meta-value">BMC / 嵌入式 Linux / 网络协议</span>
+                    <span class="meta-label">Areas</span>
+                    <span class="meta-value">net · wireless · bpf · bluetooth</span>
                 </div>
                 <div class="meta-item">
-                    <span class="meta-label">上游</span>
-                    <span class="meta-value">6 个 Linux Kernel Patch</span>
+                    <span class="meta-label">Contact</span>
+                    <span class="meta-value"><a href="mailto:xuyuqiabc@gmail.com">xuyuqiabc@gmail.com</a></span>
                 </div>
             </div>
         </div>
     </header>
 
-
     <section class="section section-alt">
         <div class="container">
-            <h2 class="section-title">开源贡献</h2>
-            <div class="contrib-list">
-                <div class="contrib-item">
-                    <div class="contrib-project">Linux Kernel</div>
-                    <div class="contrib-desc">提交 6 个安全修复 Patch，涵盖 Bluetooth、WiFi（nl80211/cfg80211）、BPF（sockmap）、网络（RDS/rxrpc）等子系统。</div>
-                    <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/log/?qt=author&q=Yuqi+Xu" target="_blank" class="link-arrow">查看提交记录 →</a>
-                </div>
-                <div class="contrib-item">
-                    <div class="contrib-project">OpenBMC</div>
-                    <div class="contrib-desc">参与联想 CFC 服务器自研 OpenBMC 固件开发，负责网络模块（phosphor-networkd）、NCSI、Redfish 网络接口。</div>
-                </div>
-            </div>
+            <h2 class="section-title">Upstream Linux</h2>
+            <p class="section-lede">Security fixes merged into mainline (<code>torvalds/linux</code>):</p>
+            <ul class="commit-list">
+                <li class="commit">
+                    <a class="commit-subject" href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=e47a1958e12abc3a17b5231a4f21c8f1bf662e08" target="_blank" rel="noopener">net: ipconfig: bound DHCP option construction</a>
+                    <span class="commit-tag">net</span><time class="commit-date">2026-09</time>
+                </li>
+                <li class="commit">
+                    <a class="commit-subject" href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a11212910cf09b2fe8db9afa41ef60c4f81879c5" target="_blank" rel="noopener">bpf: Check params size before reading reserved fields</a>
+                    <span class="commit-tag">bpf</span><time class="commit-date">2026-09</time>
+                </li>
+                <li class="commit">
+                    <a class="commit-subject" href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=403f96c32c9e24600093d7d0c61c17daeedca957" target="_blank" rel="noopener">openvswitch: Fix CT limit teardown use-after-free</a>
+                    <span class="commit-tag">ovs</span><time class="commit-date">2026-08</time>
+                </li>
+                <li class="commit">
+                    <a class="commit-subject" href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=5c65b96b549ea2dcfde497436bf9e048deb87758" target="_blank" rel="noopener">Bluetooth: hci_sync: reject oversized Broadcast Announcement prepend</a>
+                    <span class="commit-tag">bt</span><time class="commit-date">2026-06</time>
+                </li>
+                <li class="commit">
+                    <a class="commit-subject" href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=20cf0fb715c41111469577e85e35d15f099473e0" target="_blank" rel="noopener">net: rds: clear i_sends on setup unwind</a>
+                    <span class="commit-tag">net</span><time class="commit-date">2026-06</time>
+                </li>
+                <li class="commit">
+                    <a class="commit-subject" href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=4cd92957e8f8cc4ebfe8a5d4203c14c592fde6b1" target="_blank" rel="noopener">wifi: nl80211: reject oversized EMA RNR lists</a>
+                    <span class="commit-tag">wifi</span><time class="commit-date">2026-06</time>
+                </li>
+                <li class="commit">
+                    <a class="commit-subject" href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f72eed9b84fb771019a955908132410a9ba9ea3f" target="_blank" rel="noopener">bpf: sockmap: fix tail fragment offset in bpf_msg_push_data</a>
+                    <span class="commit-tag">bpf</span><time class="commit-date">2026-05</time>
+                </li>
+                <li class="commit">
+                    <a class="commit-subject" href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=7187d145d9042b037e4f10538f70cf95e380219f" target="_blank" rel="noopener">wifi: cfg80211: reject duplicate wiphy cipher suite entries</a>
+                    <span class="commit-tag">wifi</span><time class="commit-date">2026-04</time>
+                </li>
+                <li class="commit">
+                    <a class="commit-subject" href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=fe4447cd95623b1cfacc15f280aab73a6d7340b2" target="_blank" rel="noopener">rxrpc: reject undecryptable rxkad response tickets</a>
+                    <span class="commit-tag">net</span><time class="commit-date">2026-04</time>
+                </li>
+            </ul>
+            <p class="section-footer">
+                Further fixes for TIPC, mac80211, TPM, and KEYS are queued in maintainer trees.
+                <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/log/?qt=author&q=Yuqi+Xu" target="_blank" rel="noopener" class="link-arrow">Full commit log →</a>
+            </p>
+        </div>
+    </section>
+
+    <section class="section">
+        <div class="container">
+            <h2 class="section-title">Day Job</h2>
+            <p class="prose">
+                At Lenovo I own the networking stack of our in-house OpenBMC firmware —
+                <code>phosphor-networkd</code>, NCSI, and the Redfish network interfaces —
+                across Intel Eagle Stream and Birch Stream server platforms.
+                Yocto builds, D-Bus interfaces, and the occasional tcpdump session
+                in front of a customer.
+            </p>
         </div>
     </section>
 
     <footer class="footer">
         <div class="footer-container">
-            <p>© 2025 徐宇奇 · 用技术记录成长</p>
+            <p>© 2026 Yuqi Xu</p>
             <div class="footer-links">
-                <a href="mailto:xuyq21@lenovo.com">邮箱</a>
-                <a href="https://github.com/xuyq19" target="_blank">GitHub</a>
+                <a href="mailto:xuyuqiabc@gmail.com">Email</a>
+                <a href="https://github.com/xuyq19" target="_blank" rel="noopener">GitHub</a>
             </div>
         </div>
     </footer>

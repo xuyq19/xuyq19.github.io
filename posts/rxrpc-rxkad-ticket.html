@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>When decryption fails but parsing continues: an rxkad ticket bug — Yuqi Xu</title>
+    <link rel="stylesheet" href="../css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-container">
+            <a href="../index.html" class="nav-logo">xuyq</a>
+            <div class="nav-links">
+                <a href="../index.html">Home</a>
+                <a href="../resume.html">Résumé</a>
+                <a href="index.html">Blog</a>
+                <a href="https://github.com/xuyq19" target="_blank" rel="noopener">GitHub</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="article-page">
+        <header class="article-header">
+            <h1>When decryption fails but parsing continues: an rxkad ticket bug</h1>
+            <p class="article-meta">First posted 2026-04-08 · merged into mainline 2026-04-08 · rxrpc, rxkad, crypto API</p>
+        </header>
+
+        <div class="article-content">
+            <p>RxRPC is the kernel's RPC transport, best known as the protocol underneath AFS. Its rxkad security class authenticates peers by exchanging encrypted tickets. This post is about a missing return-value check in the ticket decryption path — a one-line-class bug with a long pedigree.</p>
+
+            <h2>The bug</h2>
+            <p>When a RESPONSE packet arrives, <code>rxkad_decrypt_ticket()</code> decrypts the embedded ticket and then parses the result as plaintext: extracting addresses, lifetimes, key material, and so on. The decryption call looked like this:</p>
+            <pre><code>skcipher_request_set_crypt(req, sg, sg, ticket_len, iv.x);
+crypto_skcipher_decrypt(req);
+skcipher_request_free(req);
+
+p = ticket;
+end = p + ticket_len;
+/* parse away... */</code></pre>
+            <p>The return value of <code>crypto_skcipher_decrypt()</code> was simply discarded. But decryption <em>can</em> fail — most obviously when the ticket length is not a multiple of the cipher block size. A malformed RESPONSE can pick exactly such a length, make the decrypt operation fail, and the code then cheerfully drives the ticket parser over whatever bytes are in the buffer: attacker-controlled ciphertext, never touched by the cipher at all.</p>
+
+            <h2>The fix</h2>
+            <p>Check the result, and treat a failed decrypt like any other bad ticket — abort the connection with <code>RXKADBADTICKET</code>:</p>
+            <pre><code>ret = crypto_skcipher_decrypt(req);
+skcipher_request_free(req);
+if (ret &lt; 0)
+	return rxrpc_abort_conn(conn, skb, RXKADBADTICKET, -EPROTO,
+				rxkad_abort_resp_tkt_short);</code></pre>
+            <p>After the fix, a ticket that cannot be decrypted never reaches the parser. The abort also carries a distinct tracepoint tag (<code>rxkad_abort_resp_tkt_short</code>), so the failure is observable when debugging.</p>
+
+            <h2>How old was it?</h2>
+            <p>The <code>Fixes:</code> tag points to <code>17926a79320a</code> ("[AF_RXRPC]: Provide secure RxRPC sockets…") — the original rxkad implementation. The unchecked call had been sitting there essentially since the code existed, surviving every refactor of the crypto API around it. A nice reminder that "the code is old" is not evidence that it is correct; it's often the opposite.</p>
+
+            <h2>Upstream</h2>
+            <p>David Howells picked the fix up into his rxrpc series, and it landed in mainline as <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=fe4447cd95623b1cfacc15f280aab73a6d7340b2" target="_blank" rel="noopener">fe4447cd9562</a> ("rxrpc: reject undecryptable rxkad response tickets"), with a stable backport.</p>
+            <p>Takeaway: in security-critical paths, an unchecked <code>crypto_*</code> return value is never a style issue. Assume every cryptographic operation can fail, and decide explicitly what the failure means before the data moves on.</p>
+        </div>
+    </div>
+
+    <footer class="footer">
+        <div class="footer-container">
+            <p>© 2026 Yuqi Xu</p>
+            <div class="footer-links">
+                <a href="index.html">All posts</a>
+                <a href="https://github.com/xuyq19" target="_blank" rel="noopener">GitHub</a>
+            </div>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rejecting duplicate cipher suites in wiphy_register() — Yuqi Xu</title>
+    <link rel="stylesheet" href="../css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-container">
+            <a href="../index.html" class="nav-logo">xuyq</a>
+            <div class="nav-links">
+                <a href="../index.html">Home</a>
+                <a href="../resume.html">Résumé</a>
+                <a href="index.html">Blog</a>
+                <a href="https://github.com/xuyq19" target="_blank" rel="noopener">GitHub</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="article-page">
+        <header class="article-header">
+            <h1>Rejecting duplicate cipher suites in wiphy_register()</h1>
+            <p class="article-meta">First posted 2026-04-13 · merged into mainline 2026-04-28 · wifi, cfg80211, WEXT</p>
+        </header>
+
+        <div class="article-content">
+            <p>When a wireless driver registers with cfg80211, it describes its capabilities in a <code>struct wiphy</code> — including the list of supported cipher suites. This post is about what happens when that list contains duplicates, and why the right place to reject them is at registration, not in every consumer.</p>
+
+            <h2>The bug</h2>
+            <p>Duplicate entries in <code>wiphy-&gt;cipher_suites</code> don't describe any additional capability — a cipher either is or isn't supported. But cfg80211 accepted them silently, leaving each consumer of the list to cope on its own.</p>
+            <p>One consumer that couldn't cope: the WEXT compatibility code. The ancient <code>SIOCGIWRANGE</code> ioctl reports supported encryptions through a fixed-size array, <code>iw_range::encoding_size</code>. The compat code appends one WEP key length <em>for every WEP cipher entry it sees</em>. Repeat a WEP entry enough times in the wiphy description, and the appends walk straight past the end of the array — a stack/heap-adjacent overflow triggered simply by registering a malformed device description.</p>
+
+            <h2>Why not fix WEXT?</h2>
+            <p>Patching the WEXT code to deduplicate would have fixed <em>that</em> overflow, but it leaves the underlying problem in place: a malformed input is accepted at the boundary and every future consumer has to remember to defend itself. The better invariant is to make the input itself illegal.</p>
+
+            <h2>The fix</h2>
+            <p>Validate the cipher suite list once, in <code>wiphy_register()</code>, and fail early:</p>
+            <pre><code>static bool wiphy_cipher_suites_valid(const struct wiphy *wiphy)
+{
+	int i, j;
+
+	if (wiphy-&gt;n_cipher_suites &amp;&amp; !wiphy-&gt;cipher_suites)
+		return false;
+
+	for (i = 0; i &lt; wiphy-&gt;n_cipher_suites; i++)
+		for (j = 0; j &lt; i; j++)
+			if (wiphy-&gt;cipher_suites[i] ==
+			    wiphy-&gt;cipher_suites[j])
+				return false;
+
+	return true;
+}</code></pre>
+            <p>A malformed wiphy description now fails registration with <code>-EINVAL</code>, right where the driver author will notice it, instead of corrupting memory in a legacy ioctl handler far away from the actual mistake. The list is short and registration is a cold path, so the O(n²) check costs nothing in practice.</p>
+
+            <h2>Upstream</h2>
+            <p>Merged by Johannes Berg as <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=7187d145d9042b037e4f10538f70cf95e380219f" target="_blank" rel="noopener">7187d145d904</a> ("wifi: cfg80211: reject duplicate wiphy cipher suite entries").</p>
+            <p>Takeaway: validate invariants at the boundary where data enters the subsystem. One check at registration beats N defensive checks scattered across consumers — including the ones nobody has written yet.</p>
+        </div>
+    </div>
+
+    <footer class="footer">
+        <div class="footer-container">
+            <p>© 2026 Yuqi Xu</p>
+            <div class="footer-links">
+                <a href="index.html">All posts</a>
+                <a href="https://github.com/xuyq19" target="_blank" rel="noopener">GitHub</a>
+            </div>
+        </div>
+    </footer>
+</body>
+</html>
