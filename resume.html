@@ -72,9 +72,20 @@
             <section class="resume-section">
                 <h2>开源社区贡献</h2>
                 <div class="resume-item">
+                    <p><strong>Linux Kernel 上游</strong> — 9 个安全修复 Patch 合入主线（torvalds/linux），按子系统分类：</p>
                     <ul>
-                        <li><strong>Linux Kernel 上游</strong>：9 个安全修复 Patch 合入主线（torvalds/linux），覆盖网络（Open vSwitch、RDS、rxrpc、ipconfig）、无线（cfg80211/nl80211）、BPF、Bluetooth 等子系统；另有 TIPC、mac80211、TPM、KEYS 等修复已进入 maintainer 树。提交记录：<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/log/?qt=author&q=Yuqi+Xu" target="_blank" rel="noopener">git.kernel.org（作者 Yuqi Xu）</a></li>
-                        <li><strong>OpenBMC 上游</strong>：向 phosphor-networkd、phosphor-host-ipmid 提交问题报告 2 项（GitHub: <a href="https://github.com/xuyq19" target="_blank" rel="noopener">xuyq19</a>）</li>
+                        <li><strong>网络</strong>：openvswitch（CT limit teardown 释放后使用/UAF 修复）、rds（连接建立失败路径清理）、rxrpc（rxkad 票据解密失败处理）、ipconfig（DHCP 选项构造边界检查）</li>
+                        <li><strong>无线</strong>：nl80211（EMA RNR 列表长度校验）、cfg80211（重复加密套件注册期拒绝）</li>
+                        <li><strong>BPF</strong>：sockmap（bpf_msg_push_data 分片偏移修复）、bpf crypto（参数长度校验）</li>
+                        <li><strong>Bluetooth</strong>：hci_sync（广播数据长度校验）</li>
+                    </ul>
+                    <p>另有 TIPC、mac80211、TPM、KEYS 等子系统修复已进入 maintainer 树。提交记录：<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/log/?qt=author&q=Yuqi+Xu" target="_blank" rel="noopener">git.kernel.org（作者 Yuqi Xu）</a></p>
+                </div>
+                <div class="resume-item">
+                    <p><strong>OpenBMC 上游</strong> — 问题报告 2 项（GitHub: <a href="https://github.com/xuyq19" target="_blank" rel="noopener">xuyq19</a>）：</p>
+                    <ul>
+                        <li>phosphor-networkd#80：多网卡同子网场景下静态 IPv4 配置影响其他接口路由/ARP 行为</li>
+                        <li>phosphor-host-ipmid#217：DHCP 网关场景下 ipmitool lan print 默认网关 MAC 显示为全零</li>
                     </ul>
                 </div>
             </section>
